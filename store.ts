@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { AppData, ToastMessage, TaskStatus } from './types';
 import { Task, Epic, getNextRecurringDate } from './tasks.model';
-import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution } from './finance.model';
 import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
 import { TWA, generateId } from './utils';
 import { useFamilyData, useMutations } from './queries';
@@ -13,8 +13,6 @@ export const useAppStore = () => {
   const mutations = useMutations();
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  // Temporary local state to trigger modal shown only once per session if needed
-  // In a real app, this might be handled via a separate "Session Store"
   const [bonusData, setBonusData] = useState<{ streak: number, xp: number } | null>(null);
 
   // --- Utils ---
@@ -61,7 +59,6 @@ export const useAppStore = () => {
           newStreak = 1;
           bonusXp = 10; // Day 1 bonus
       } else {
-          // Should be covered by first check, but safety fallback
           return;
       }
 
@@ -94,7 +91,6 @@ export const useAppStore = () => {
           rewardLogs: newLogs
       });
 
-      // Trigger Modal
       setBonusData({ streak: newStreak, xp: bonusXp });
       TWA.notification('success');
   };
@@ -105,7 +101,6 @@ export const useAppStore = () => {
           mutations.batchUpdate.mutate({ currentUser: user });
           TWA.haptic('medium');
           addToast(`Вы вошли как ${user.name}`, 'INFO');
-          // checkDailyStreak will be called by the useEffect in App when currentUser changes
       }
   };
 
@@ -341,6 +336,79 @@ export const useAppStore = () => {
       addToast('Награда активирована! Наслаждайся.', 'SUCCESS');
   };
 
+  // --- New Savings Goals Actions ---
+
+  const saveSavingsGoal = (goal: SavingsGoal) => {
+      const isUpdate = !!data.savingsGoals.find(g => g.id === goal.id);
+      let newGoals = [...data.savingsGoals];
+      if (isUpdate) {
+          newGoals = newGoals.map(g => g.id === goal.id ? goal : g);
+      } else {
+          newGoals.push(goal);
+      }
+      mutations.batchUpdate.mutate({ savingsGoals: newGoals });
+      TWA.haptic('light');
+  };
+
+  const contributeToGoal = (goalId: string, amount: number, sourceAccountId: string, message?: string) => {
+      const goal = data.savingsGoals.find(g => g.id === goalId);
+      const account = data.accounts.find(a => a.id === sourceAccountId);
+      
+      if (amount <= 0) {
+           addToast('Сумма должна быть больше нуля', 'ERROR');
+           return;
+      }
+
+      if (!goal || !account) return;
+
+      if (account.balance < amount) {
+          addToast('Недостаточно средств на счете', 'ERROR');
+          return;
+      }
+
+      // 1. Update Account (Deduct)
+      const updatedAccount = { ...account, balance: account.balance - amount };
+      const newAccounts = data.accounts.map(a => a.id === account.id ? updatedAccount : a);
+
+      // 2. Update Goal (Add)
+      const updatedGoal = { ...goal, currentAmount: goal.currentAmount + amount };
+      const newGoals = data.savingsGoals.map(g => g.id === goal.id ? updatedGoal : g);
+
+      // 3. Create Contribution Record
+      const contribution: GoalContribution = {
+          id: generateId(),
+          goalId,
+          userId: data.currentUser.id,
+          amount,
+          message,
+          date: Date.now()
+      };
+      const newContributions = [contribution, ...data.contributions];
+
+      // 4. Create Transaction Record (So we know where money went in history)
+      const transaction: Transaction = {
+          id: generateId(),
+          amount,
+          type: 'EXPENSE', // Technically a transfer, but leaves the "Wallet"
+          categoryId: 'goal_contrib', // System category
+          accountId: sourceAccountId,
+          title: `В копилку: ${goal.title}`,
+          date: new Date().toISOString(),
+          createdById: data.currentUser.id
+      };
+      const newTransactions = [transaction, ...data.transactions];
+
+      mutations.batchUpdate.mutate({
+          accounts: newAccounts,
+          savingsGoals: newGoals,
+          contributions: newContributions,
+          transactions: newTransactions
+      });
+
+      addToast(`Отложено в копилку! 💰`, 'SUCCESS');
+      TWA.notification('success');
+  };
+
   return {
     data,
     isLoading,
@@ -353,7 +421,7 @@ export const useAppStore = () => {
     actions: {
       app: { switchUser, resetData, checkDailyStreak },
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
-      finance: { saveTransaction, saveAccount, saveBudgets },
+      finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal },
       epics: { save: saveEpic },
       family: { updateUser, buyReward, consumeItem }
     }

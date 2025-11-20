@@ -7,7 +7,10 @@ import {
   PiggyBank, 
   Wallet, 
   AlertTriangle,
-  PieChart
+  PieChart,
+  Target,
+  Sparkles,
+  ArrowRight
 } from 'lucide-react';
 import { AppData, User, Epic } from './types';
 import { 
@@ -15,10 +18,11 @@ import {
     Transaction, 
     BudgetPlan, 
     FinancialGoal, 
+    SavingsGoal,
     CATEGORIES 
 } from './finance.model';
 import { formatMoney, isVisible } from './utils';
-import { VisibilitySelector } from './ui-kit';
+import { VisibilitySelector, Modal, Avatar } from './ui-kit';
 
 // --- Components ---
 
@@ -56,7 +60,183 @@ export const TransactionItem = ({ transaction, user }: { transaction: Transactio
   );
 };
 
+export const GoalCard = ({ goal, onClick }: { goal: SavingsGoal, onClick: () => void }) => {
+    const safeTarget = goal.targetAmount || 1; // Prevent division by zero
+    const progress = Math.min((goal.currentAmount / safeTarget) * 100, 100);
+    
+    return (
+        <div 
+            onClick={onClick}
+            className="min-w-[200px] bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-hidden cursor-pointer active:scale-95 transition-transform"
+        >
+            <div className="flex justify-between items-start mb-3">
+                <div className="w-10 h-10 bg-gray-50 rounded-full flex items-center justify-center text-xl">
+                    {goal.icon}
+                </div>
+                <div className="bg-gray-50 px-2 py-1 rounded-lg text-[10px] font-bold text-gray-500">
+                    {Math.round(progress)}%
+                </div>
+            </div>
+            
+            <div className="font-bold text-gray-900 leading-tight mb-1">{goal.title}</div>
+            <div className="text-xs text-gray-400 mb-3">
+                {formatMoney(goal.currentAmount)} / {formatMoney(goal.targetAmount)}
+            </div>
+
+            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div 
+                    className="h-full bg-gradient-to-r from-blue-400 to-purple-400 rounded-full transition-all duration-500" 
+                    style={{ width: `${progress}%` }} 
+                />
+            </div>
+            
+            {progress >= 100 && (
+                <div className="absolute inset-0 bg-black/60 flex items-center justify-center backdrop-blur-sm animate-in fade-in">
+                    <div className="bg-white text-black px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 shadow-xl">
+                        <Sparkles size={12} /> Готово!
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+};
+
 // --- Editors ---
+
+export const ContributionModal = ({ 
+    isOpen, 
+    onClose, 
+    goal, 
+    accounts, 
+    onConfirm 
+}: { 
+    isOpen: boolean, 
+    onClose: () => void, 
+    goal: SavingsGoal | null, 
+    accounts: Account[], 
+    onConfirm: (amount: number, accountId: string, message?: string) => void 
+}) => {
+    const [amount, setAmount] = useState('');
+    const [accountId, setAccountId] = useState(accounts[0]?.id || '');
+    const [message, setMessage] = useState('');
+
+    if (!isOpen || !goal) return null;
+
+    // Ensure accountId is valid (in case accounts list changed)
+    const safeAccountId = accountId || accounts[0]?.id; 
+    const selectedAccount = accounts.find(a => a.id === safeAccountId);
+    
+    const numericAmount = Number(amount) * 100;
+    const canAfford = selectedAccount && selectedAccount.balance >= numericAmount && numericAmount > 0;
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={`В копилку: ${goal.title}`}>
+            <div className="space-y-4 pb-10">
+                <div className="text-center py-4">
+                    <div className="text-4xl mb-2">{goal.icon}</div>
+                    <p className="text-gray-500 text-sm">Осталось накопить: <span className="font-bold text-gray-900">{formatMoney(Math.max(0, goal.targetAmount - goal.currentAmount))}</span></p>
+                </div>
+
+                <div>
+                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Сумма пополнения</label>
+                    <input 
+                        type="number" 
+                        value={amount} 
+                        onChange={e => setAmount(e.target.value)}
+                        placeholder="0" 
+                        min="1"
+                        className="w-full bg-gray-50 rounded-xl p-3 text-lg font-bold outline-none"
+                        autoFocus
+                    />
+                </div>
+
+                <div>
+                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Откуда списать?</label>
+                    <select 
+                        value={safeAccountId} 
+                        onChange={e => setAccountId(e.target.value)}
+                        className="w-full bg-gray-50 rounded-xl p-3 text-sm outline-none appearance-none"
+                    >
+                        {accounts.map(a => (
+                            <option key={a.id} value={a.id}>{a.name} ({formatMoney(a.balance)})</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div>
+                    <input 
+                        value={message} 
+                        onChange={e => setMessage(e.target.value)}
+                        placeholder="Сообщение (напр. Подарок)" 
+                        className="w-full bg-gray-50 rounded-xl p-3 text-sm outline-none"
+                    />
+                </div>
+
+                <button 
+                    onClick={() => {
+                        onConfirm(numericAmount, safeAccountId!, message);
+                        onClose();
+                        setAmount('');
+                        setMessage('');
+                    }}
+                    disabled={!amount || !canAfford}
+                    className="w-full bg-black text-white rounded-xl py-3 font-bold disabled:opacity-50 shadow-lg active:scale-95 transition-transform"
+                >
+                    Пополнить
+                </button>
+            </div>
+        </Modal>
+    );
+};
+
+export const SavingsGoalEditor = ({ onSave, goal }: { onSave: (g: SavingsGoal) => void, goal?: SavingsGoal | null }) => {
+    const [title, setTitle] = useState(goal?.title || '');
+    const [targetAmount, setTargetAmount] = useState(goal ? (goal.targetAmount / 100).toString() : '');
+    const [icon, setIcon] = useState(goal?.icon || '💰');
+
+    return (
+        <div className="space-y-4">
+            <div className="flex gap-2">
+                <input 
+                    value={icon}
+                    onChange={e => setIcon(e.target.value)}
+                    className="w-14 text-center bg-gray-50 rounded-xl p-3 text-2xl outline-none"
+                    placeholder="Emoji"
+                />
+                <input 
+                    value={title} 
+                    onChange={e => setTitle(e.target.value)}
+                    placeholder="Название цели (напр. LEGO)"
+                    className="flex-1 bg-gray-50 rounded-xl p-3 outline-none font-bold"
+                />
+            </div>
+            <input 
+                type="number"
+                value={targetAmount} 
+                onChange={e => setTargetAmount(e.target.value)}
+                placeholder="Сколько нужно накопить?"
+                className="w-full bg-gray-50 rounded-xl p-3 outline-none"
+            />
+            
+            <button 
+                onClick={() => onSave({
+                    id: goal?.id || Math.random().toString(36).substr(2, 9),
+                    title,
+                    targetAmount: Number(targetAmount) * 100,
+                    currentAmount: goal?.currentAmount || 0,
+                    icon,
+                    status: 'ACTIVE',
+                    createdById: goal?.createdById || '', // Will be set by store
+                    createdAt: goal?.createdAt || Date.now()
+                })}
+                disabled={!title || !targetAmount}
+                className="w-full bg-black text-white rounded-xl py-3 font-bold disabled:opacity-50"
+            >
+                {goal ? 'Сохранить' : 'Создать цель'}
+            </button>
+        </div>
+    )
+};
 
 export const TransactionEditor = ({ onSave, accounts, goals, transaction }: { onSave: (data: any) => void, accounts: Account[], goals: FinancialGoal[], transaction?: Transaction | null }) => {
     const [amount, setAmount] = useState(transaction ? (transaction.amount / 100).toString() : '');
@@ -99,7 +279,7 @@ export const TransactionEditor = ({ onSave, accounts, goals, transaction }: { on
             </div>
 
             <div className="grid grid-cols-4 gap-2">
-                {Object.values(CATEGORIES).filter(c => c.type === 'BOTH' || c.type === type).map(cat => (
+                {Object.values(CATEGORIES).filter(c => (c.type === 'BOTH' || c.type === type) && c.id !== 'goal_contrib').map(cat => (
                     <button 
                         key={cat.id} 
                         onClick={() => setCategoryId(cat.id)}
@@ -228,7 +408,7 @@ export const AccountEditor = ({ onSave, members, epics, account }: { onSave: (ac
                 <div className="bg-gray-50 p-3 rounded-xl">
                      <div className="flex items-center gap-2 mb-2">
                          <input type="checkbox" checked={hasGoal} onChange={e => setHasGoal(e.target.checked)} id="hg" />
-                         <label htmlFor="hg" className="font-medium text-sm">Это финансовая цель</label>
+                         <label htmlFor="hg" className="font-medium text-sm">Это банковский вклад/цель</label>
                      </div>
                      {hasGoal && (
                          <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
@@ -283,7 +463,7 @@ export const BudgetEditor = ({ budgets, onSave }: { budgets: BudgetPlan[], onSav
     return (
         <div className="space-y-4 pb-10">
             <p className="text-sm text-gray-500">Установите месячные лимиты для категорий. Оставьте пустым, если лимит не нужен.</p>
-            {Object.values(CATEGORIES).filter(c => c.type === 'EXPENSE').map(cat => {
+            {Object.values(CATEGORIES).filter(c => c.type === 'EXPENSE' && c.id !== 'goal_contrib').map(cat => {
                 const b = localBudgets.find(lb => lb.categoryId === cat.id);
                 return (
                     <div key={cat.id} className="flex items-center gap-3">
@@ -317,7 +497,9 @@ export const FinanceScreen = ({
     onManageBudgets,
     onCreateEpicFromGoal,
     onEditAccount,
-    onEditTransaction
+    onEditTransaction,
+    onSaveSavingsGoal,
+    onContribute
 }: { 
     data: AppData, 
     onAddTransaction: () => void,
@@ -325,15 +507,17 @@ export const FinanceScreen = ({
     onManageBudgets: () => void,
     onCreateEpicFromGoal: (g: FinancialGoal) => void,
     onEditAccount: (a: Account) => void,
-    onEditTransaction: (t: Transaction) => void
+    onEditTransaction: (t: Transaction) => void,
+    onSaveSavingsGoal?: (g: SavingsGoal) => void,
+    onContribute?: (goalId: string, amount: number, accId: string, msg?: string) => void
 }) => {
     const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser.id));
     const visibleTransactions = data.transactions
         .filter(t => visibleAccounts.some(a => a.id === t.accountId))
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Sort by date desc
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     // Calculate Budgets
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const currentMonth = new Date().toISOString().slice(0, 7); 
     const budgetStats = data.budgets.map(budget => {
         const spent = visibleTransactions
             .filter(t => t.type === 'EXPENSE' && t.categoryId === budget.categoryId && t.date.startsWith(currentMonth))
@@ -341,8 +525,46 @@ export const FinanceScreen = ({
         return { ...budget, spent };
     });
 
+    // State
+    const [isGoalModalOpen, setGoalModalOpen] = useState(false);
+    const [isContribOpen, setContribOpen] = useState(false);
+    const [activeGoal, setActiveGoal] = useState<SavingsGoal | null>(null);
+
     return (
-        <div className="p-4 pb-24 space-y-8">
+        <div className="p-4 pb-24 space-y-8 animate-in fade-in duration-300">
+            
+            {/* New: Dream Jars Section */}
+            <div>
+                <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-bold flex items-center gap-2"><Target size={20} className="text-purple-500" /> Вишлист</h2>
+                    <button 
+                        onClick={() => { setActiveGoal(null); setGoalModalOpen(true); }}
+                        className="text-blue-600 text-sm bg-blue-50 px-2 py-1 rounded-lg"
+                    >
+                        <Plus size={16} />
+                    </button>
+                </div>
+                <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
+                    {data.savingsGoals.length === 0 ? (
+                        <div className="w-full bg-gray-50 border border-dashed border-gray-200 rounded-2xl p-6 text-center">
+                            <p className="text-gray-400 text-sm mb-2">Нет целей</p>
+                            <button onClick={() => setGoalModalOpen(true)} className="text-sm font-bold text-blue-500">Создать копилку</button>
+                        </div>
+                    ) : (
+                        data.savingsGoals.map(goal => (
+                            <GoalCard 
+                                key={goal.id} 
+                                goal={goal} 
+                                onClick={() => {
+                                    setActiveGoal(goal);
+                                    setContribOpen(true);
+                                }} 
+                            />
+                        ))
+                    )}
+                </div>
+            </div>
+
             {/* Accounts */}
             <div>
                 <div className="flex items-center justify-between mb-3">
@@ -354,6 +576,7 @@ export const FinanceScreen = ({
                 <div className="grid grid-cols-1 gap-3">
                     {visibleAccounts.map(acc => {
                          const goal = data.goals.find(g => g.accountId === acc.id);
+                         const safeGoalTarget = goal ? (goal.targetAmount || 1) : 1;
                          return (
                              <div 
                                 key={acc.id} 
@@ -377,10 +600,10 @@ export const FinanceScreen = ({
                                          <div className="mt-4 pt-4 border-t border-white/10">
                                              <div className="flex justify-between text-xs mb-1 text-gray-300">
                                                  <span>Цель: {goal.title}</span>
-                                                 <span>{Math.round((goal.currentAmount / goal.targetAmount) * 100)}%</span>
+                                                 <span>{Math.round((goal.currentAmount / safeGoalTarget) * 100)}%</span>
                                              </div>
                                              <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden mb-2">
-                                                 <div className="h-full bg-blue-400 rounded-full" style={{ width: `${Math.min((goal.currentAmount / goal.targetAmount) * 100, 100)}%` }} />
+                                                 <div className="h-full bg-blue-400 rounded-full" style={{ width: `${Math.min((goal.currentAmount / safeGoalTarget) * 100, 100)}%` }} />
                                              </div>
                                              {!goal.epicId && (
                                                  <button 
@@ -413,7 +636,7 @@ export const FinanceScreen = ({
                     ) : (
                         budgetStats.map(b => {
                             const cat = CATEGORIES[b.categoryId];
-                            const percent = Math.min((b.spent / b.limit) * 100, 100);
+                            const percent = Math.min((b.spent / (b.limit || 1)) * 100, 100); // Safe devision
                             const isOver = b.spent > b.limit;
                             
                             return (
@@ -469,6 +692,28 @@ export const FinanceScreen = ({
             >
                 <Plus size={24} />
             </button>
+
+            {/* Modals */}
+            <Modal isOpen={isGoalModalOpen} onClose={() => setGoalModalOpen(false)} title={activeGoal ? 'Редактировать цель' : 'Новая цель'}>
+                <SavingsGoalEditor 
+                    onSave={(g) => {
+                        if (onSaveSavingsGoal) onSaveSavingsGoal(g);
+                        setGoalModalOpen(false);
+                    }} 
+                    goal={activeGoal} 
+                />
+            </Modal>
+
+            <ContributionModal 
+                isOpen={isContribOpen} 
+                onClose={() => setContribOpen(false)}
+                goal={activeGoal}
+                accounts={visibleAccounts.filter(a => a.balance > 0)}
+                onConfirm={(amount, accId, msg) => {
+                     if (onContribute && activeGoal) onContribute(activeGoal.id, amount, accId, msg);
+                }}
+            />
+
         </div>
     );
 };

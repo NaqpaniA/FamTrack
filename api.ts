@@ -1,7 +1,7 @@
 
 import { AppData, User } from './types';
 import { Task, Epic } from './tasks.model';
-import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution } from './finance.model';
 import { Reward, RewardLog, InventoryItem } from './family.model';
 import { LocalDatabase, generateId } from './utils';
 import { INITIAL_DATA } from './data';
@@ -21,6 +21,11 @@ export interface ApiInterface {
     updateUser(user: User): Promise<User>;
     saveRewardLog(log: RewardLog): Promise<RewardLog>;
     saveInventoryItem(item: InventoryItem): Promise<InventoryItem>;
+    
+    // New Methods
+    saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal>;
+    saveContribution(contribution: GoalContribution): Promise<GoalContribution>;
+
     batchUpdate(updates: Partial<AppData>): Promise<void>; 
 }
 
@@ -52,6 +57,9 @@ class LocalAdapter implements ApiInterface {
         const data = LocalDatabase.load();
         // Ensure we always have structure even if DB was empty/corrupted
         if (!data.tasks) return INITIAL_DATA;
+        // Migration for Savings Goals
+        if (!data.savingsGoals) data.savingsGoals = [];
+        if (!data.contributions) data.contributions = [];
         return data;
     }
 
@@ -141,6 +149,28 @@ class LocalAdapter implements ApiInterface {
         });
     }
 
+    async saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal> {
+        return this.queue.enqueue(async () => {
+            await this.delay();
+            const data = this.getData();
+            const idx = data.savingsGoals.findIndex(g => g.id === goal.id);
+            if (idx >= 0) data.savingsGoals[idx] = goal;
+            else data.savingsGoals.push(goal);
+            this.saveData(data);
+            return goal;
+        });
+    }
+
+    async saveContribution(contribution: GoalContribution): Promise<GoalContribution> {
+        return this.queue.enqueue(async () => {
+            await this.delay();
+            const data = this.getData();
+            data.contributions.unshift(contribution);
+            this.saveData(data);
+            return contribution;
+        });
+    }
+
     async saveBudgets(budgets: BudgetPlan[]): Promise<BudgetPlan[]> {
         return this.queue.enqueue(async () => {
             await this.delay();
@@ -214,6 +244,8 @@ class SupabaseAdapter implements ApiInterface {
     async saveTransaction(tx: Transaction): Promise<Transaction> { return tx; }
     async saveAccount(acc: Account): Promise<Account> { return acc; }
     async saveGoal(goal: FinancialGoal): Promise<FinancialGoal> { return goal; }
+    async saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal> { return goal; }
+    async saveContribution(c: GoalContribution): Promise<GoalContribution> { return c; }
     async saveBudgets(budgets: BudgetPlan[]): Promise<BudgetPlan[]> { return budgets; }
     async updateUser(user: User): Promise<User> { return user; }
     async saveRewardLog(log: RewardLog): Promise<RewardLog> { return log; }

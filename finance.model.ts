@@ -16,6 +16,7 @@ import {
 
 export type TransactionType = 'INCOME' | 'EXPENSE' | 'TRANSFER';
 export type AccountType = 'CARD' | 'CASH' | 'SAVINGS';
+export type GoalStatus = 'ACTIVE' | 'COMPLETED' | 'PAUSED';
 
 export interface Account {
   id: string;
@@ -27,6 +28,7 @@ export interface Account {
   visibleTo?: string[];
 }
 
+// Legacy Goal tied to specific accounts (e.g. Bank Savings Account)
 export interface FinancialGoal {
   id: string;
   accountId: string;
@@ -37,6 +39,28 @@ export interface FinancialGoal {
   epicId?: string; // Link to epic
   createdById?: string;
   visibleTo?: string[];
+}
+
+// New "Dream Jar" Goal (Virtual, Independent)
+export interface SavingsGoal {
+    id: string;
+    title: string;
+    description?: string;
+    targetAmount: number;
+    currentAmount: number;
+    status: GoalStatus;
+    icon: string; // Emoji
+    createdById: string;
+    createdAt: number;
+}
+
+export interface GoalContribution {
+    id: string;
+    goalId: string;
+    userId: string;
+    amount: number;
+    message?: string; // "Birthday gift", "From chores"
+    date: number;
 }
 
 export interface BudgetPlan {
@@ -77,5 +101,6 @@ export const CATEGORIES: Record<string, TransactionCategory> = {
   salary: { id: 'salary', label: 'Зарплата', icon: React.createElement(Briefcase, { size: 20 }), color: 'bg-green-100 text-green-600', type: 'INCOME' },
   gift: { id: 'gift', label: 'Подарок', icon: React.createElement(Gift, { size: 20 }), color: 'bg-yellow-100 text-yellow-600', type: 'INCOME' },
   transfer: { id: 'transfer', label: 'Перевод', icon: React.createElement(ArrowRightLeft, { size: 20 }), color: 'bg-slate-100 text-slate-600', type: 'BOTH' },
+  goal_contrib: { id: 'goal_contrib', label: 'В копилку', icon: React.createElement(Car, { size: 20 }), color: 'bg-teal-100 text-teal-600', type: 'EXPENSE' }, // System category
   other: { id: 'other', label: 'Другое', icon: React.createElement(Circle, { size: 20 }), color: 'bg-slate-100 text-slate-600', type: 'BOTH' },
 };
