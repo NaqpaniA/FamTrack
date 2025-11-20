@@ -17,12 +17,14 @@ export const DashboardScreen = ({
     data, 
     onTaskClick, 
     onNavigate,
-    onAddEpic
+    onAddEpic,
+    onOpenProfile
 }: { 
     data: AppData, 
     onTaskClick: (t: Task) => void,
     onNavigate: (tab: Tab, epicId?: string) => void,
-    onAddEpic: () => void
+    onAddEpic: () => void,
+    onOpenProfile: () => void
 }) => {
     const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser.id));
     const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser.id));
@@ -45,7 +47,7 @@ export const DashboardScreen = ({
                     <h1 className="text-2xl font-bold text-gray-900">Привет, {data.currentUser.name}! 👋</h1>
                     <p className="text-gray-500 text-sm">Вот что у нас происходит</p>
                  </div>
-                 <Avatar user={data.currentUser} size="lg" />
+                 <Avatar user={data.currentUser} size="lg" onClick={onOpenProfile} />
             </div>
 
             {/* Summary Cards */}

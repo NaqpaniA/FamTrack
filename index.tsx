@@ -1,11 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Layout, CheckSquare, Wallet, Users } from 'lucide-react';
 import { Tab } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account } from './finance.model';
-import { isVisible } from './utils';
+import { isVisible, TWA } from './utils';
 import { useAppStore } from './store';
 
 // UI Modules
@@ -13,6 +13,7 @@ import { DashboardScreen } from './dashboard.ui';
 import { FamilyScreen } from './family.ui';
 import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
 import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
+import { SettingsModal } from './settings.ui';
 import { Modal, ToastContainer } from './ui-kit';
 
 const App = () => {
@@ -26,6 +27,7 @@ const App = () => {
   const [isTxModalOpen, setTxModalOpen] = useState(false);
   const [isAccModalOpen, setAccModalOpen] = useState(false);
   const [isBudgetModalOpen, setBudgetModalOpen] = useState(false);
+  const [isSettingsOpen, setSettingsOpen] = useState(false);
   
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -34,16 +36,28 @@ const App = () => {
   const [activeEpicFilter, setActiveEpicFilter] = useState<string | undefined>(undefined);
   const [initialEpicData, setInitialEpicData] = useState<Partial<Epic> | undefined>(undefined);
 
+  // --- Init TWA ---
+  useEffect(() => {
+      TWA.ready();
+      TWA.expand();
+      TWA.enableClosingConfirmation();
+      
+      // Prevent pull-to-refresh loop on some devices
+      document.body.style.backgroundColor = TWA.backgroundColor;
+  }, []);
+
   // --- Handlers ---
 
   const handleNavigate = (tab: Tab, epicFilter?: string) => {
       setActiveTab(tab);
       setActiveEpicFilter(epicFilter);
+      TWA.selection();
   };
 
   const openEpicModal = (initial?: Partial<Epic>) => {
       setInitialEpicData(initial);
       setEpicModalOpen(true);
+      TWA.selection();
   };
 
   const handleTaskSave = (task: Task) => {
@@ -53,9 +67,11 @@ const App = () => {
   };
 
   const handleTaskDelete = (id: string) => {
-      actions.tasks.delete(id);
-      setTaskModalOpen(false);
-      setEditingTask(null);
+      if (confirm('Удалить задачу?')) {
+        actions.tasks.delete(id);
+        setTaskModalOpen(false);
+        setEditingTask(null);
+      }
   };
 
   const handleTxSave = (txData: any) => {
@@ -81,40 +97,46 @@ const App = () => {
       setInitialEpicData(undefined);
   };
 
+  const handleSwitchUser = (id: string) => {
+      actions.app.switchUser(id);
+      setSettingsOpen(false);
+  };
+
   // --- Render ---
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-blue-100 pb-safe-area">
+    <div className="min-h-screen text-gray-900 font-sans selection:bg-blue-100 pb-safe-area transition-colors duration-300" style={{ backgroundColor: TWA.backgroundColor }}>
        <ToastContainer toasts={toasts} removeToast={removeToast} />
 
        {/* Tab Navigation */}
-       <div className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-100 flex justify-around py-3 pb-6 z-50 safe-bottom">
-          <button onClick={() => setActiveTab('DASHBOARD')} className={`flex flex-col items-center gap-1 ${activeTab === 'DASHBOARD' ? 'text-black' : 'text-gray-400'}`}>
+       <div className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-md border-t border-gray-100 flex justify-around py-3 pb-6 z-50 safe-bottom shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
+          <button onClick={() => handleNavigate('DASHBOARD')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'DASHBOARD' ? 'text-black scale-105' : 'text-gray-400'}`}>
               <Layout size={24} strokeWidth={activeTab === 'DASHBOARD' ? 2.5 : 2} />
               <span className="text-[10px] font-bold">Главная</span>
           </button>
-          <button onClick={() => handleNavigate('TASKS')} className={`flex flex-col items-center gap-1 ${activeTab === 'TASKS' ? 'text-black' : 'text-gray-400'}`}>
+          <button onClick={() => handleNavigate('TASKS')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'TASKS' ? 'text-black scale-105' : 'text-gray-400'}`}>
               <CheckSquare size={24} strokeWidth={activeTab === 'TASKS' ? 2.5 : 2} />
               <span className="text-[10px] font-bold">Задачи</span>
           </button>
-          <button onClick={() => setActiveTab('FINANCE')} className={`flex flex-col items-center gap-1 ${activeTab === 'FINANCE' ? 'text-black' : 'text-gray-400'}`}>
+          <button onClick={() => handleNavigate('FINANCE')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'FINANCE' ? 'text-black scale-105' : 'text-gray-400'}`}>
               <Wallet size={24} strokeWidth={activeTab === 'FINANCE' ? 2.5 : 2} />
               <span className="text-[10px] font-bold">Финансы</span>
           </button>
-          <button onClick={() => setActiveTab('FAMILY')} className={`flex flex-col items-center gap-1 ${activeTab === 'FAMILY' ? 'text-black' : 'text-gray-400'}`}>
+          <button onClick={() => handleNavigate('FAMILY')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'FAMILY' ? 'text-black scale-105' : 'text-gray-400'}`}>
               <Users size={24} strokeWidth={activeTab === 'FAMILY' ? 2.5 : 2} />
               <span className="text-[10px] font-bold">Семья</span>
           </button>
        </div>
 
        {/* Main Content Area */}
-       <div className="max-w-md mx-auto min-h-screen bg-white sm:border-x border-gray-100 sm:shadow-2xl relative">
+       <div className="max-w-md mx-auto min-h-screen sm:border-x border-gray-100 sm:shadow-2xl relative bg-gray-50/50">
           {activeTab === 'DASHBOARD' && (
               <DashboardScreen 
                 data={data} 
                 onTaskClick={t => { setEditingTask(t); setTaskModalOpen(true); }} 
                 onNavigate={handleNavigate}
                 onAddEpic={() => openEpicModal()}
+                onOpenProfile={() => setSettingsOpen(true)}
               />
           )}
           {activeTab === 'TASKS' && (
@@ -188,6 +210,14 @@ const App = () => {
               members={data.members} 
               goals={data.goals.filter(g => isVisible(g, data.currentUser.id))}
               initialData={initialEpicData}
+           />
+       </Modal>
+
+       <Modal isOpen={isSettingsOpen} onClose={() => setSettingsOpen(false)} title="Настройки">
+           <SettingsModal 
+              data={data}
+              onSwitchUser={handleSwitchUser}
+              onReset={actions.app.resetData}
            />
        </Modal>
     </div>

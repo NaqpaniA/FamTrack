@@ -5,7 +5,7 @@ import { Task, Epic, getNextRecurringDate } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
 import { User, Reward, RewardLog, calculateLevel } from './family.model';
 import { INITIAL_DATA } from './data';
-import { LocalDatabase } from './utils';
+import { LocalDatabase, TWA } from './utils';
 
 export const useAppStore = () => {
   const [data, setData] = useState<AppData>(INITIAL_DATA);
@@ -18,18 +18,40 @@ export const useAppStore = () => {
   }, []);
 
   useEffect(() => {
-    LocalDatabase.save(data);
+    if (data !== INITIAL_DATA) {
+        LocalDatabase.save(data);
+    }
   }, [data]);
 
   // --- Utils ---
   const addToast = (msg: string, type: 'SUCCESS' | 'INFO' | 'ERROR' = 'SUCCESS') => {
       const id = Math.random().toString();
       setToasts(prev => [...prev, { id, message: msg, type }]);
+      // Trigger haptic feedback on toast
+      if (type === 'SUCCESS') TWA.notification('success');
+      if (type === 'ERROR') TWA.notification('error');
+      
       setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
   };
 
   const removeToast = (id: string) => {
       setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
+  // --- App Actions ---
+  const switchUser = (userId: string) => {
+      const user = data.members.find(m => m.id === userId);
+      if (user) {
+          setData(prev => ({ ...prev, currentUser: user }));
+          TWA.haptic('medium');
+          addToast(`Вы вошли как ${user.name}`, 'INFO');
+      }
+  };
+
+  const resetData = () => {
+      if (confirm('Вы уверены? Все данные будут удалены.')) {
+          LocalDatabase.reset();
+      }
   };
 
   // --- Tasks Actions ---
@@ -41,10 +63,12 @@ export const useAppStore = () => {
               : [...prev.tasks, task];
           return { ...prev, tasks: newTasks };
       });
+      TWA.haptic('light');
   };
 
   const deleteTask = (id: string) => {
       setData(prev => ({ ...prev, tasks: prev.tasks.filter(t => t.id !== id) }));
+      TWA.haptic('medium');
   };
 
   const toggleTaskStatus = (id: string, status: TaskStatus) => {
@@ -101,6 +125,8 @@ export const useAppStore = () => {
            addToast(`Задача выполнена! Следующий срок: ${formattedDate}`, 'INFO');
       } else if (status === 'DONE') {
           addToast(`Задача выполнена! +${taskForToast?.points} XP`, 'SUCCESS');
+      } else {
+          TWA.selection();
       }
   };
 
@@ -158,6 +184,7 @@ export const useAppStore = () => {
 
           return { ...prev, accounts: accs, goals, transactions: newTransactions };
       });
+      TWA.haptic('medium');
   };
 
   const saveAccount = (acc: Account, goal?: FinancialGoal) => {
@@ -186,10 +213,12 @@ export const useAppStore = () => {
                 : prev.epics
           }
       });
+      TWA.haptic('light');
   };
 
   const saveBudgets = (newBudgets: BudgetPlan[]) => {
       setData(prev => ({ ...prev, budgets: newBudgets }));
+      TWA.haptic('light');
   };
 
   // --- Epic Actions ---
@@ -206,6 +235,7 @@ export const useAppStore = () => {
               goals
           };
       });
+      TWA.haptic('light');
   };
 
   // --- Family Actions ---
@@ -215,6 +245,7 @@ export const useAppStore = () => {
           members: prev.members.map(m => m.id === updatedUser.id ? updatedUser : m),
           currentUser: prev.currentUser.id === updatedUser.id ? updatedUser : prev.currentUser
       }));
+      TWA.haptic('light');
   };
 
   const buyReward = (reward: Reward) => {
@@ -252,6 +283,7 @@ export const useAppStore = () => {
     addToast,
     removeToast,
     actions: {
+      app: { switchUser, resetData },
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
       finance: { saveTransaction, saveAccount, saveBudgets },
       epics: { save: saveEpic },

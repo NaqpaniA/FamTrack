@@ -4,18 +4,47 @@ import { INITIAL_DATA } from './data';
 
 export const DB_KEY = 'FAMILY_OS_V5_DATA';
 
+// --- Telegram Web App Utils ---
+
+// Safe access to Telegram Web App object
+const tg = (window as any).Telegram?.WebApp;
+
+export const TWA = {
+  ready: () => tg?.ready(),
+  expand: () => tg?.expand(),
+  close: () => tg?.close(),
+  enableClosingConfirmation: () => tg?.enableClosingConfirmation(),
+  // Haptic Feedback
+  haptic: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => {
+      tg?.HapticFeedback.impactOccurred(style);
+  },
+  notification: (type: 'error' | 'success' | 'warning') => {
+      tg?.HapticFeedback.notificationOccurred(type);
+  },
+  selection: () => {
+      tg?.HapticFeedback.selectionChanged();
+  },
+  // Colors
+  backgroundColor: tg?.themeParams?.bg_color || '#f3f4f6',
+  textColor: tg?.themeParams?.text_color || '#1f2937',
+  buttonColor: tg?.themeParams?.button_color || '#000000',
+  buttonTextColor: tg?.themeParams?.button_text_color || '#ffffff',
+  
+  // User
+  user: tg?.initDataUnsafe?.user,
+};
+
+// --- Database Utils ---
+
 export class LocalDatabase {
   static load(): AppData {
     try {
       const stored = localStorage.getItem(DB_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        // Migration helper if needed
+        // Basic migration check
         if (!parsed.accounts && (parsed as any).wallet) {
-            parsed.accounts = [{ id: 'ac1', name: (parsed as any).wallet.name, balance: (parsed as any).wallet.balance, type: 'CARD' }];
-            parsed.goals = [];
-            parsed.budgets = [];
-            parsed.rewardLogs = [];
+            return INITIAL_DATA; // Reset if too old
         }
         return parsed;
       }
@@ -31,6 +60,11 @@ export class LocalDatabase {
     } catch (e) {
       console.error("Failed to save data", e);
     }
+  }
+  
+  static reset() {
+      localStorage.removeItem(DB_KEY);
+      window.location.reload();
   }
 }
 
