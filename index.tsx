@@ -2,12 +2,14 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Layout, CheckSquare, Wallet, Users } from 'lucide-react';
-import { Tab, AppData, TaskStatus, ToastMessage, User } from './types';
+import { Tab, AppData, TaskStatus, ToastMessage } from './types';
 import { Task, Epic, getNextRecurringDate } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
+import { User, Reward, RewardLog, calculateLevel } from './family.model';
 import { INITIAL_DATA } from './data';
 import { LocalDatabase, isVisible } from './utils';
-import { DashboardScreen, FamilyScreen } from './screens';
+import { DashboardScreen } from './screens';
+import { FamilyScreen } from './family.ui';
 import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
 import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
 import { Modal, ToastContainer } from './ui-kit';
@@ -44,7 +46,7 @@ const App = () => {
 
   // --- Handlers ---
 
-  const addToast = (msg: string, type: 'SUCCESS' | 'INFO' = 'SUCCESS') => {
+  const addToast = (msg: string, type: 'SUCCESS' | 'INFO' | 'ERROR' = 'SUCCESS') => {
       const id = Math.random().toString();
       setToasts(prev => [...prev, { id, message: msg, type }]);
       setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
@@ -81,16 +83,22 @@ const App = () => {
           if (!task) return prev;
           
           const isCompleting = status === 'DONE' && task.status !== 'DONE';
-          let newUsers = [...prev.members];
+          let newMembers = [...prev.members];
           let newLogs = [...prev.rewardLogs];
           let updatedTask = { ...task, status };
 
           // XP Logic
           if (isCompleting) {
-              newUsers = newUsers.map(u => u.id === task.assigneeId ? { ...u, xp: u.xp + task.points } : u);
+              newMembers = newMembers.map(u => {
+                  if (u.id === task.assigneeId) {
+                      const newXp = u.xp + task.points;
+                      return { ...u, xp: newXp, level: calculateLevel(newXp) };
+                  }
+                  return u;
+              });
               newLogs.push({
                   id: Math.random().toString(),
-                  userId: task.assigneeId,
+                  userId: task.assigneeId || 'unknown',
                   action: 'EARNED',
                   amount: task.points,
                   description: `Выполнил: ${task.title}`,
@@ -108,9 +116,10 @@ const App = () => {
 
           return {
               ...prev,
-              members: newUsers,
+              members: newMembers,
               rewardLogs: newLogs,
-              tasks: prev.tasks.map(t => t.id === id ? updatedTask : t)
+              tasks: prev.tasks.map(t => t.id === id ? updatedTask : t),
+              currentUser: newMembers.find(m => m.id === prev.currentUser.id) || prev.currentUser
           };
       });
 
@@ -120,7 +129,7 @@ const App = () => {
            const formattedDate = new Date(nextDate).toLocaleDateString('ru-RU');
            addToast(`Задача выполнена! Следующий срок: ${formattedDate}`, 'INFO');
       } else if (status === 'DONE') {
-          addToast('Задача выполнена! XP начислено', 'SUCCESS');
+          addToast(`Задача выполнена! +${taskForToast?.points} XP`, 'SUCCESS');
       }
   };
 
@@ -166,11 +175,8 @@ const App = () => {
               return a;
           });
 
-          // Update Goal if applicable (Simple logic: just add current tx amount for incomes)
-          // Note: complex goal logic with updates requires more robust history, simplified here
           const goals = prev.goals.map(g => {
               if (g.accountId === newTx.accountId && newTx.type === 'INCOME') {
-                  // If updating, remove old amount first
                   let currentAmount = g.currentAmount;
                   if (revertData && revertData.type === 'INCOME' && revertData.accountId === newTx.accountId) {
                       currentAmount -= revertData.amount;
@@ -196,7 +202,6 @@ const App = () => {
   };
 
   const saveAccount = (acc: Account, goal?: FinancialGoal) => {
-      // Ensure Creator is set
       if (!acc.createdById) acc.createdById = data.currentUser.id;
       
       setData(prev => {
@@ -255,6 +260,35 @@ const App = () => {
           members: prev.members.map(m => m.id === updatedUser.id ? updatedUser : m),
           currentUser: prev.currentUser.id === updatedUser.id ? updatedUser : prev.currentUser
       }));
+  };
+
+  const handleBuyReward = (reward: Reward) => {
+      if (data.currentUser.xp < reward.cost) {
+          addToast('Недостаточно XP!', 'ERROR');
+          return;
+      }
+
+      setData(prev => {
+          const newXp = prev.currentUser.xp - reward.cost;
+          const updatedUser = { ...prev.currentUser, xp: newXp, level: calculateLevel(newXp) };
+          
+          const newLog: RewardLog = {
+              id: Math.random().toString(),
+              userId: updatedUser.id,
+              action: 'SPENT',
+              amount: reward.cost,
+              description: `Купил: ${reward.title}`,
+              timestamp: Date.now()
+          };
+
+          return {
+              ...prev,
+              currentUser: updatedUser,
+              members: prev.members.map(m => m.id === updatedUser.id ? updatedUser : m),
+              rewardLogs: [newLog, ...prev.rewardLogs]
+          }
+      });
+      addToast(`Вы купили: ${reward.title}`, 'SUCCESS');
   };
 
   const openEpicModal = (initial?: Partial<Epic>) => {
@@ -321,7 +355,11 @@ const App = () => {
               />
           )}
           {activeTab === 'FAMILY' && (
-              <FamilyScreen data={data} onUpdateUser={updateUser} />
+              <FamilyScreen 
+                data={data} 
+                onUpdateUser={updateUser} 
+                onBuyReward={handleBuyReward}
+              />
           )}
        </div>
 

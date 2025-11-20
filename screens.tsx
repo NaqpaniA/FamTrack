@@ -5,10 +5,9 @@ import {
   Plus, 
   Sparkles, 
   Wallet, 
-  Crown,
   CheckSquare,
 } from 'lucide-react';
-import { AppData, Task, Tab, User } from './types';
+import { AppData, Task, Tab } from './types';
 import { TaskItem } from './tasks.ui';
 import { Avatar } from './ui-kit';
 import { formatMoney, isVisible } from './utils';
@@ -156,52 +155,4 @@ export const DashboardScreen = ({
             </div>
         </div>
     );
-};
-
-// --- Family Screen ---
-
-export const FamilyScreen = ({ data, onUpdateUser }: { data: AppData, onUpdateUser: (u: User) => void }) => {
-    return (
-        <div className="p-4 pb-24 space-y-6">
-             <div className="flex items-center justify-between">
-                 <h1 className="text-2xl font-bold">Семья</h1>
-                 <div className="bg-gray-100 px-3 py-1 rounded-full text-xs font-bold text-gray-500">
-                     {data.members.length} чел.
-                 </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-                {data.members.map(user => (
-                    <div key={user.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center text-center relative overflow-hidden">
-                        {user.role === 'OWNER' && <Crown size={16} className="absolute top-3 right-3 text-yellow-500" />}
-                        <div className="mb-3 relative">
-                            <Avatar user={user} size="xl" />
-                            <div className="absolute -bottom-1 -right-1 bg-black text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                                Lvl {user.level}
-                            </div>
-                        </div>
-                        <div className="font-bold text-lg mb-1">{user.name}</div>
-                        <div className="text-xs text-gray-400 mb-3 capitalize">{user.role.toLowerCase()}</div>
-                        
-                        <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden mb-1">
-                            <div className="bg-yellow-400 h-full rounded-full" style={{ width: `${(user.xp % 1000) / 10}%` }} />
-                        </div>
-                        <div className="text-[10px] text-gray-400 font-medium">{user.xp} XP</div>
-                    </div>
-                ))}
-            </div>
-            
-            {/* Rewards / Shop Teaser */}
-            <div className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-2xl p-6 text-white">
-                 <div className="flex items-center gap-3 mb-2">
-                     <Sparkles size={24} className="text-yellow-300" />
-                     <h3 className="text-lg font-bold">Магазин Наград</h3>
-                 </div>
-                 <p className="text-white/80 text-sm mb-4">Обменивайте заработанный XP на реальные награды!</p>
-                 <button className="bg-white text-purple-600 px-4 py-2 rounded-xl text-sm font-bold shadow-lg active:scale-95 transition-transform">
-                     Скоро...
-                 </button>
-            </div>
-        </div>
-    )
 };

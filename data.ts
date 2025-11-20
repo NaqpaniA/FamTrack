@@ -1,11 +1,12 @@
 
-import { User, AppData } from './types';
+import { AppData } from './types';
+import { User } from './family.model';
 
 export const MOCK_USERS: User[] = [
-  { id: 'u1', name: 'Папа', role: 'OWNER', avatar: '👨🏻', xp: 2450, level: 8, telegramUsername: 'Naqpania' },
-  { id: 'u2', name: 'Мама', role: 'ADMIN', avatar: '👩🏼', xp: 2100, level: 7 },
+  { id: 'u1', name: 'Папа', role: 'OWNER', avatar: '👨🏻', xp: 2450, level: 5, telegramUsername: 'Naqpania' },
+  { id: 'u2', name: 'Мама', role: 'ADMIN', avatar: '👩🏼', xp: 2100, level: 4 },
   { id: 'u3', name: 'Сын', role: 'CHILD', avatar: '👦🏻', xp: 850, level: 3 },
-  { id: 'u4', name: 'Дочь', role: 'CHILD', avatar: '👧🏼', xp: 1200, level: 4 },
+  { id: 'u4', name: 'Дочь', role: 'CHILD', avatar: '👧🏼', xp: 1200, level: 3 },
 ];
 
 export const INITIAL_DATA: AppData = {
@@ -47,9 +48,11 @@ export const INITIAL_DATA: AppData = {
     { id: 't1', amount: 250000, title: 'Супермаркет', type: 'EXPENSE', categoryId: 'food', accountId: 'ac1', date: new Date().toISOString(), createdById: 'u1' },
   ],
   rewards: [
-      { id: 'r1', title: 'Пицца на ужин', cost: 500, icon: '🍕' },
-      { id: 'r2', title: 'Поход в кино', cost: 1000, icon: '🍿' },
-      { id: 'r3', title: '1 час игры', cost: 200, icon: '🎮' },
+      { id: 'r1', title: 'Пицца на ужин', cost: 500, icon: '🍕', description: 'Заказ любой пиццы на дом' },
+      { id: 'r2', title: 'Поход в кино', cost: 1000, icon: '🍿', description: 'Билеты и попкорн' },
+      { id: 'r3', title: '1 час игры', cost: 200, icon: '🎮', description: 'Дополнительное время за компьютером' },
+      { id: 'r4', title: 'Мороженое', cost: 150, icon: '🍦' },
+      { id: 'r5', title: 'Новая игра', cost: 5000, icon: '💿', description: 'Покупка игры в Steam/PS' },
   ],
   rewardLogs: []
 };
