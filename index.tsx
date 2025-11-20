@@ -1,7 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Layout, CheckSquare, Wallet, Users } from 'lucide-react';
+import { Layout, CheckSquare, Wallet, Users, Loader2 } from 'lucide-react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
 import { Tab } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account } from './finance.model';
@@ -16,8 +18,18 @@ import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from '.
 import { SettingsModal } from './settings.ui';
 import { Modal, ToastContainer } from './ui-kit';
 
+// --- Query Client Setup ---
+const queryClient = new QueryClient({
+    defaultOptions: {
+        queries: {
+            refetchOnWindowFocus: false,
+            retry: 1,
+        }
+    }
+});
+
 const App = () => {
-  const { data, toasts, removeToast, actions } = useAppStore();
+  const { data, isLoading, toasts, removeToast, actions } = useAppStore();
   
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
   
@@ -41,8 +53,6 @@ const App = () => {
       TWA.ready();
       TWA.expand();
       TWA.enableClosingConfirmation();
-      
-      // Prevent pull-to-refresh loop on some devices
       document.body.style.backgroundColor = TWA.backgroundColor;
   }, []);
 
@@ -103,6 +113,14 @@ const App = () => {
   };
 
   // --- Render ---
+  
+  if (isLoading) {
+      return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+              <Loader2 className="animate-spin text-gray-400" size={32} />
+          </div>
+      )
+  }
 
   return (
     <div className="min-h-screen text-gray-900 font-sans selection:bg-blue-100 pb-safe-area transition-colors duration-300" style={{ backgroundColor: TWA.backgroundColor }}>
@@ -166,12 +184,12 @@ const App = () => {
                 data={data} 
                 onUpdateUser={actions.family.updateUser} 
                 onBuyReward={actions.family.buyReward}
+                onConsumeItem={actions.family.consumeItem}
               />
           )}
        </div>
 
        {/* Modals */}
-       {/* Note: We use 'key' prop here to force re-mount when the editing item changes, ensuring state resets */}
        
        <Modal isOpen={isTaskModalOpen} onClose={() => setTaskModalOpen(false)} title={editingTask ? 'Редактировать задачу' : 'Новая задача'}>
            <TaskEditor 
@@ -231,4 +249,8 @@ const App = () => {
 };
 
 const root = createRoot(document.getElementById('root')!);
-root.render(<App />);
+root.render(
+    <QueryClientProvider client={queryClient}>
+        <App />
+    </QueryClientProvider>
+);

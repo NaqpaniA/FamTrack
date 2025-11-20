@@ -32,9 +32,38 @@ export const TWA = {
   
   // User
   user: tg?.initDataUnsafe?.user,
+  initData: tg?.initData,
 };
 
-// --- Database Utils ---
+// --- Helper Utils ---
+
+export const generateId = (): string => {
+    // Simple UUID v4 replacement for browser env
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+};
+
+export const formatMoney = (cents: number) => {
+  return (cents / 100).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 });
+};
+
+export const isVisible = (item: any, userId: string) => {
+    // 1. Creator always sees their own item
+    if (item.createdById === userId) return true;
+    
+    // 2. Assignee always sees their task (if property exists)
+    if (item.assigneeId === userId) return true;
+
+    // 3. If visibleTo is undefined or empty, it's public (everyone sees)
+    if (!item.visibleTo || item.visibleTo.length === 0) return true;
+
+    // 4. Strict Check: Only people in the list can see. 
+    return item.visibleTo.includes(userId);
+};
+
+// --- Legacy Local DB (kept for Adapter fallback) ---
 
 export class LocalDatabase {
   static load(): AppData {
@@ -45,6 +74,10 @@ export class LocalDatabase {
         // Basic migration check
         if (!parsed.accounts && (parsed as any).wallet) {
             return INITIAL_DATA; // Reset if too old
+        }
+        // Migration for Inventory (if it doesn't exist)
+        if (!parsed.inventory) {
+            parsed.inventory = [];
         }
         return parsed;
       }
@@ -67,21 +100,3 @@ export class LocalDatabase {
       window.location.reload();
   }
 }
-
-export const formatMoney = (cents: number) => {
-  return (cents / 100).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 });
-};
-
-export const isVisible = (item: any, userId: string) => {
-    // 1. Creator always sees their own item
-    if (item.createdById === userId) return true;
-    
-    // 2. Assignee always sees their task (if property exists)
-    if (item.assigneeId === userId) return true;
-
-    // 3. If visibleTo is undefined or empty, it's public (everyone sees)
-    if (!item.visibleTo || item.visibleTo.length === 0) return true;
-
-    // 4. Strict Check: Only people in the list can see. 
-    return item.visibleTo.includes(userId);
-};

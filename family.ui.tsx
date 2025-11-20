@@ -8,10 +8,14 @@ import {
   History, 
   Star,
   Lock,
-  Coins
+  Coins,
+  Backpack,
+  Ticket,
+  CheckCheck,
+  Clock
 } from 'lucide-react';
 import { AppData } from './types';
-import { User, Reward, calculateLevel, getLevelProgress, getNextLevelXp } from './family.model';
+import { User, Reward, InventoryItem, calculateLevel, getLevelProgress, getNextLevelXp } from './family.model';
 import { Avatar, Card, Modal } from './ui-kit';
 
 // --- Components ---
@@ -85,27 +89,76 @@ export const RewardCard = ({ reward, userXp, onBuy }: { reward: Reward, userXp: 
     )
 };
 
+export const InventoryItemCard = ({ item, reward, onConsume }: { item: InventoryItem, reward?: Reward, onConsume: () => void }) => {
+    if (!reward) return null;
+    const isUsed = item.status === 'USED';
+
+    return (
+        <div className={`relative p-4 rounded-2xl border flex flex-col items-center text-center transition-all ${isUsed ? 'bg-gray-50 border-gray-100 opacity-60 grayscale' : 'bg-white border-blue-100 shadow-sm ring-1 ring-blue-50/50'}`}>
+             {isUsed && (
+                 <div className="absolute inset-0 flex items-center justify-center z-10">
+                     <div className="bg-gray-800 text-white text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 rotate-[-10deg]">
+                         <CheckCheck size={12} /> Использовано
+                     </div>
+                 </div>
+             )}
+             
+             <div className="text-4xl mb-2">{reward.icon}</div>
+             <div className="font-bold text-sm mb-1">{reward.title}</div>
+             <div className="text-[10px] text-gray-400 mb-3 flex items-center gap-1">
+                 {isUsed ? <Clock size={10} /> : <Ticket size={10} />}
+                 {isUsed 
+                    ? `Использовано ${new Date(item.usedAt!).toLocaleDateString()}`
+                    : `Куплено ${new Date(item.purchasedAt).toLocaleDateString()}`
+                 }
+             </div>
+
+             {!isUsed && (
+                 <button 
+                    onClick={onConsume}
+                    className="w-full bg-blue-600 text-white text-xs font-bold py-2 rounded-xl hover:bg-blue-700 active:scale-95 transition-all shadow-blue-200 shadow-lg"
+                 >
+                     Использовать
+                 </button>
+             )}
+        </div>
+    )
+};
+
 // --- Screens ---
 
 export const FamilyScreen = ({ 
     data, 
     onUpdateUser, 
-    onBuyReward 
+    onBuyReward,
+    onConsumeItem
 }: { 
     data: AppData, 
     onUpdateUser: (u: User) => void,
-    onBuyReward: (reward: Reward) => void
+    onBuyReward: (reward: Reward) => void,
+    onConsumeItem?: (item: InventoryItem, rewardTitle: string) => void
 }) => {
-    const [activeTab, setActiveTab] = useState<'MEMBERS' | 'SHOP'>('MEMBERS');
+    const [activeTab, setActiveTab] = useState<'MEMBERS' | 'SHOP' | 'INVENTORY'>('MEMBERS');
     const [isHistoryOpen, setHistoryOpen] = useState(false);
 
-    // Filter history for current user or all if owner? Let's show all for now but maybe limit length
     const history = [...data.rewardLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 20);
+    
+    // Inventory Logic
+    const myInventory = (data.inventory || []).filter(i => i.ownerId === data.currentUser.id);
+    const activeItems = myInventory.filter(i => i.status === 'AVAILABLE').sort((a,b) => b.purchasedAt - a.purchasedAt);
+    const usedItems = myInventory.filter(i => i.status === 'USED').sort((a,b) => b.usedAt! - a.usedAt!);
+
+    const handleConsume = (item: InventoryItem) => {
+        const r = data.rewards.find(r => r.id === item.rewardId);
+        if (r && confirm(`Активировать "${r.title}" сейчас? Это действие нельзя отменить.`)) {
+            onConsumeItem?.(item, r.title);
+        }
+    };
 
     return (
         <div className="p-4 pb-24 min-h-screen flex flex-col space-y-6">
              {/* Header */}
-             <div className="flex items-center justify-between">
+             <div className="flex items-center justify-between flex-wrap gap-2">
                  <h1 className="text-2xl font-bold">Семья</h1>
                  <div className="flex bg-gray-100 p-1 rounded-xl">
                     <button 
@@ -113,6 +166,12 @@ export const FamilyScreen = ({
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'MEMBERS' ? 'bg-white shadow text-black' : 'text-gray-400'}`}
                     >
                         Участники
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('INVENTORY')} 
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'INVENTORY' ? 'bg-white shadow text-black' : 'text-gray-400'}`}
+                    >
+                        <Backpack size={14} /> Рюкзак
                     </button>
                     <button 
                         onClick={() => setActiveTab('SHOP')} 
@@ -156,6 +215,51 @@ export const FamilyScreen = ({
                             </div>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {activeTab === 'INVENTORY' && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center justify-between">
+                        <h3 className="font-bold text-lg">Мои вещи</h3>
+                        <span className="text-xs text-gray-400">{activeItems.length} доступно</span>
+                    </div>
+
+                    {myInventory.length === 0 ? (
+                        <div className="text-center py-10 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                            <Backpack className="mx-auto text-gray-300 mb-2" size={48} />
+                            <p className="text-gray-400 text-sm">Рюкзак пуст. Купите что-нибудь в магазине!</p>
+                            <button onClick={() => setActiveTab('SHOP')} className="mt-4 text-blue-500 text-sm font-bold">Перейти в магазин</button>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-3">
+                            {activeItems.map(item => (
+                                <InventoryItemCard 
+                                    key={item.id} 
+                                    item={item} 
+                                    reward={data.rewards.find(r => r.id === item.rewardId)}
+                                    onConsume={() => handleConsume(item)}
+                                />
+                            ))}
+                            {usedItems.length > 0 && (
+                                <>
+                                    <div className="col-span-2 mt-4 mb-2 flex items-center gap-2">
+                                        <div className="h-px flex-1 bg-gray-200" />
+                                        <span className="text-xs text-gray-400 font-medium uppercase">История</span>
+                                        <div className="h-px flex-1 bg-gray-200" />
+                                    </div>
+                                    {usedItems.map(item => (
+                                        <InventoryItemCard 
+                                            key={item.id} 
+                                            item={item} 
+                                            reward={data.rewards.find(r => r.id === item.rewardId)}
+                                            onConsume={() => {}}
+                                        />
+                                    ))}
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -203,8 +307,8 @@ export const FamilyScreen = ({
                             return (
                                 <div key={log.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                                     <div className="flex items-center gap-3">
-                                        <div className={`p-2 rounded-full ${log.action === 'EARNED' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                                            {log.action === 'EARNED' ? <Sparkles size={16} /> : <ShoppingBag size={16} />}
+                                        <div className={`p-2 rounded-full ${log.action === 'EARNED' ? 'bg-green-100 text-green-600' : log.action === 'USED' ? 'bg-blue-100 text-blue-600' : 'bg-red-100 text-red-600'}`}>
+                                            {log.action === 'EARNED' ? <Sparkles size={16} /> : log.action === 'USED' ? <Ticket size={16} /> : <ShoppingBag size={16} />}
                                         </div>
                                         <div>
                                             <div className="text-sm font-medium leading-tight">{log.description}</div>
@@ -213,8 +317,8 @@ export const FamilyScreen = ({
                                             </div>
                                         </div>
                                     </div>
-                                    <div className={`font-bold text-sm ${log.action === 'EARNED' ? 'text-green-600' : 'text-red-600'}`}>
-                                        {log.action === 'EARNED' ? '+' : '-'}{log.amount}
+                                    <div className={`font-bold text-sm ${log.action === 'EARNED' ? 'text-green-600' : 'text-gray-500'}`}>
+                                        {log.action === 'EARNED' ? '+' + log.amount : log.action === 'SPENT' ? '-' + log.amount : ''}
                                     </div>
                                 </div>
                             )

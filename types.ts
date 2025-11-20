@@ -2,7 +2,7 @@
 import React from 'react';
 import { Account, FinancialGoal, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType } from './finance.model';
 import { Task, Epic, TaskStatus, Priority, Frequency } from './tasks.model';
-import { User, Reward, RewardLog, Role } from './family.model';
+import { User, Reward, RewardLog, Role, InventoryItem } from './family.model';
 
 export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY';
 
@@ -17,6 +17,7 @@ export interface AppData {
   transactions: Transaction[];
   rewards: Reward[];
   rewardLogs: RewardLog[];
+  inventory: InventoryItem[]; // New Field
 }
 
 export interface ToastMessage {
@@ -28,4 +29,4 @@ export interface ToastMessage {
 // Re-export domain types for convenience
 export type { Account, FinancialGoal, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType };
 export type { Task, Epic, TaskStatus, Priority, Frequency };
-export type { User, Reward, RewardLog, Role };
+export type { User, Reward, RewardLog, Role, InventoryItem };

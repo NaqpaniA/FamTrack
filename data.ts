@@ -54,5 +54,6 @@ export const INITIAL_DATA: AppData = {
       { id: 'r4', title: 'Мороженое', cost: 150, icon: '🍦' },
       { id: 'r5', title: 'Новая игра', cost: 5000, icon: '💿', description: 'Покупка игры в Steam/PS' },
   ],
-  rewardLogs: []
+  rewardLogs: [],
+  inventory: []
 };

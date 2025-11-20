@@ -24,10 +24,21 @@ export interface Reward {
 export interface RewardLog {
   id: string;
   userId: string;
-  action: 'EARNED' | 'SPENT';
-  amount: number;
+  action: 'EARNED' | 'SPENT' | 'USED'; // Added USED
+  amount: number; // 0 for USED
   description: string;
   timestamp: number;
+}
+
+export type ItemStatus = 'AVAILABLE' | 'USED';
+
+export interface InventoryItem {
+  id: string;
+  rewardId: string;
+  ownerId: string;
+  status: ItemStatus;
+  purchasedAt: number;
+  usedAt?: number;
 }
 
 // --- Utils ---
