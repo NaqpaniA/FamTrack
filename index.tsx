@@ -171,8 +171,11 @@ const App = () => {
        </div>
 
        {/* Modals */}
+       {/* Note: We use 'key' prop here to force re-mount when the editing item changes, ensuring state resets */}
+       
        <Modal isOpen={isTaskModalOpen} onClose={() => setTaskModalOpen(false)} title={editingTask ? 'Редактировать задачу' : 'Новая задача'}>
            <TaskEditor 
+              key={editingTask ? editingTask.id : 'new-task'}
               task={editingTask} 
               members={data.members} 
               epics={data.epics.filter(e => isVisible(e, data.currentUser.id))}
@@ -184,6 +187,7 @@ const App = () => {
 
        <Modal isOpen={isTxModalOpen} onClose={() => setTxModalOpen(false)} title={editingTransaction ? "Операция" : "Новая операция"}>
            <TransactionEditor 
+              key={editingTransaction ? editingTransaction.id : 'new-tx'}
               onSave={handleTxSave} 
               accounts={data.accounts.filter(a => isVisible(a, data.currentUser.id))}
               goals={data.goals.filter(g => isVisible(g, data.currentUser.id))}
@@ -193,6 +197,7 @@ const App = () => {
 
        <Modal isOpen={isAccModalOpen} onClose={() => setAccModalOpen(false)} title={editingAccount ? "Редактировать счет" : "Новый счет"}>
            <AccountEditor 
+              key={editingAccount ? editingAccount.id : 'new-acc'}
               onSave={handleAccountSave} 
               members={data.members} 
               epics={data.epics.filter(e => isVisible(e, data.currentUser.id))}
@@ -206,6 +211,7 @@ const App = () => {
 
        <Modal isOpen={isEpicModalOpen} onClose={() => setEpicModalOpen(false)} title="Новая Цель (Эпик)">
            <EpicEditor 
+              key={initialEpicData ? 'with-data' : 'new-epic'}
               onSave={handleEpicSave} 
               members={data.members} 
               goals={data.goals.filter(g => isVisible(g, data.currentUser.id))}

@@ -81,9 +81,13 @@ export const useAppStore = () => {
           const isCompleting = status === 'DONE' && task.status !== 'DONE';
           let newMembers = [...prev.members];
           let newLogs = [...prev.rewardLogs];
-          let updatedTask = { ...task, status };
+          let newTasks = [...prev.tasks];
 
-          // XP Logic
+          // 1. Update the status of the current task
+          const updatedCurrentTask = { ...task, status };
+          newTasks = newTasks.map(t => t.id === id ? updatedCurrentTask : t);
+
+          // 2. Handle XP and Rewards
           if (isCompleting) {
               newMembers = newMembers.map(u => {
                   if (u.id === task.assigneeId) {
@@ -101,12 +105,21 @@ export const useAppStore = () => {
                   timestamp: Date.now()
               });
 
-              // Recurring Logic
+              // 3. Handle Recurring Logic (Clone and Create New)
               if (task.isRecurring) {
-                   updatedTask.status = 'TODO';
                    const nextDate = getNextRecurringDate(task.dueDate, task.frequency);
-                   updatedTask.dueDate = nextDate;
-                   updatedTask.subtasks = updatedTask.subtasks.map(s => ({ ...s, isCompleted: false }));
+                   const nextTask: Task = {
+                       ...task,
+                       id: Math.random().toString(36).substr(2, 9), // New ID
+                       status: 'TODO', // Reset status
+                       dueDate: nextDate, // New Date
+                       subtasks: task.subtasks.map(s => ({ ...s, isCompleted: false })), // Reset subtasks
+                       createdAt: Date.now()
+                   };
+                   newTasks.push(nextTask);
+                   
+                   // Notify user specifically about the next task
+                   setTimeout(() => addToast(`Создана следующая задача на ${new Date(nextDate).toLocaleDateString('ru-RU')}`, 'INFO'), 500);
               }
           }
 
@@ -114,16 +127,12 @@ export const useAppStore = () => {
               ...prev,
               members: newMembers,
               rewardLogs: newLogs,
-              tasks: prev.tasks.map(t => t.id === id ? updatedTask : t),
+              tasks: newTasks,
               currentUser: newMembers.find(m => m.id === prev.currentUser.id) || prev.currentUser
           };
       });
 
-      if (taskForToast && status === 'DONE' && taskForToast.status !== 'DONE' && taskForToast.isRecurring) {
-           const nextDate = getNextRecurringDate(taskForToast.dueDate, taskForToast.frequency);
-           const formattedDate = new Date(nextDate).toLocaleDateString('ru-RU');
-           addToast(`Задача выполнена! Следующий срок: ${formattedDate}`, 'INFO');
-      } else if (status === 'DONE') {
+      if (taskForToast && status === 'DONE') {
           addToast(`Задача выполнена! +${taskForToast?.points} XP`, 'SUCCESS');
       } else {
           TWA.selection();
@@ -134,31 +143,43 @@ export const useAppStore = () => {
   const saveTransaction = (txData: any) => {
       const isUpdate = !!txData.id;
       const txId = txData.id || Math.random().toString(36).substr(2,9);
-      let revertData = isUpdate ? data.transactions.find(t => t.id === txId) : null;
+      
+      // Find the original transaction BEFORE modification to revert its effects
+      const originalTx = isUpdate ? data.transactions.find(t => t.id === txId) : null;
 
       const newTx: Transaction = {
           id: txId,
           createdById: data.currentUser.id,
           date: new Date().toISOString(),
           ...txData,
-          ...(revertData ? { createdById: revertData.createdById, date: revertData.date } : {}) 
+          ...(originalTx ? { createdById: originalTx.createdById, date: originalTx.date } : {}) // Keep original date/creator on edit
       };
 
       setData(prev => {
           let accs = [...prev.accounts];
+          let goals = [...prev.goals];
 
-          // Revert old logic
-          if (revertData) {
+          // 1. Revert Original Transaction Effects (if updating)
+          if (originalTx) {
               accs = accs.map(a => {
-                  if (a.id === revertData!.accountId) {
-                      const diff = revertData!.type === 'INCOME' ? -revertData!.amount : revertData!.amount;
+                  if (a.id === originalTx.accountId) {
+                      // Inverse logic: If it was expense (-), add back (+). If income (+), subtract (-).
+                      const diff = originalTx.type === 'INCOME' ? -originalTx.amount : originalTx.amount;
                       return { ...a, balance: a.balance + diff };
                   }
                   return a;
               });
+              
+              // Revert goal impact if it was an income directly to a goal account
+              goals = goals.map(g => {
+                   if (g.accountId === originalTx.accountId && originalTx.type === 'INCOME') {
+                       return { ...g, currentAmount: g.currentAmount - originalTx.amount };
+                   }
+                   return g;
+              });
           }
 
-          // Apply new logic
+          // 2. Apply New Transaction Effects
           accs = accs.map(a => {
               if (a.id === newTx.accountId) {
                   const diff = newTx.type === 'INCOME' ? newTx.amount : -newTx.amount;
@@ -167,13 +188,9 @@ export const useAppStore = () => {
               return a;
           });
 
-          const goals = prev.goals.map(g => {
+          goals = goals.map(g => {
               if (g.accountId === newTx.accountId && newTx.type === 'INCOME') {
-                  let currentAmount = g.currentAmount;
-                  if (revertData && revertData.type === 'INCOME' && revertData.accountId === newTx.accountId) {
-                      currentAmount -= revertData.amount;
-                  }
-                  return { ...g, currentAmount: currentAmount + newTx.amount };
+                  return { ...g, currentAmount: g.currentAmount + newTx.amount };
               }
               return g;
           });

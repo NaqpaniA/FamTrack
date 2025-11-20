@@ -25,6 +25,8 @@ import { VisibilitySelector } from './ui-kit';
 export const TransactionItem = ({ transaction, user }: { transaction: Transaction, user?: User }) => {
   const isExpense = transaction.type === 'EXPENSE';
   const category = CATEGORIES[transaction.categoryId] || CATEGORIES.other;
+  const date = new Date(transaction.date);
+  const isToday = date.toDateString() === new Date().toDateString();
   
   return (
     <div className="flex items-center justify-between py-3 border-b border-gray-50 last:border-0">
@@ -40,8 +42,10 @@ export const TransactionItem = ({ transaction, user }: { transaction: Transactio
         <div>
           <div className="font-medium text-gray-800">{transaction.title || category.label}</div>
           <div className="text-xs text-gray-400 flex items-center gap-1">
+             <span>{isToday ? date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : date.toLocaleDateString()}</span>
+             <span>•</span>
              {user && <span className="bg-gray-100 px-1 rounded text-[10px]">{user.name}</span>}
-             {transaction.deviationReason && <span className="text-red-400 truncate max-w-[100px]">{transaction.deviationReason}</span>}
+             {transaction.deviationReason && <span className="text-red-400 truncate max-w-[100px]">• {transaction.deviationReason}</span>}
           </div>
         </div>
       </div>
@@ -324,7 +328,9 @@ export const FinanceScreen = ({
     onEditTransaction: (t: Transaction) => void
 }) => {
     const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser.id));
-    const visibleTransactions = data.transactions.filter(t => visibleAccounts.some(a => a.id === t.accountId));
+    const visibleTransactions = data.transactions
+        .filter(t => visibleAccounts.some(a => a.id === t.accountId))
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()); // Sort by date desc
 
     // Calculate Budgets
     const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
