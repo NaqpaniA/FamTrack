@@ -2,12 +2,15 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Layout, CheckSquare, Wallet, Users } from 'lucide-react';
-import { Tab, AppData, Task, TaskStatus, Transaction, Account, FinancialGoal, BudgetPlan, Epic, User, ToastMessage } from './types';
+import { Tab, AppData, TaskStatus, ToastMessage, User } from './types';
+import { Task, Epic, getNextRecurringDate } from './tasks.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
 import { INITIAL_DATA } from './data';
-import { LocalDatabase, isVisible, getNextRecurringDate } from './utils';
-import { DashboardScreen, TasksScreen, FinanceScreen, FamilyScreen } from './screens';
+import { LocalDatabase, isVisible } from './utils';
+import { DashboardScreen, FamilyScreen } from './screens';
+import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
+import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
 import { Modal, ToastContainer } from './ui-kit';
-import { TaskEditor, TransactionEditor, AccountEditor, BudgetEditor, EpicEditor } from './editors';
 
 const App = () => {
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
