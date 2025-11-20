@@ -6,6 +6,7 @@ import {
   Sparkles, 
   Wallet, 
   CheckSquare,
+  Flame
 } from 'lucide-react';
 import { AppData, Task, Tab } from './types';
 import { TaskItem } from './tasks.ui';
@@ -38,13 +39,21 @@ export const DashboardScreen = ({
     }).length;
 
     const totalBalance = visibleAccounts.reduce((sum, acc) => sum + acc.balance, 0);
+    const streak = data.currentUser.streak || 0;
 
     return (
         <div className="p-4 pb-24 space-y-6 animate-in fade-in duration-300">
             {/* Header */}
             <div className="flex items-center justify-between">
                  <div>
-                    <h1 className="text-2xl font-bold text-gray-900">Привет, {data.currentUser.name}! 👋</h1>
+                    <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                        Привет, {data.currentUser.name}! 
+                        {streak > 0 && (
+                             <div className="flex items-center gap-0.5 bg-orange-50 text-orange-600 px-2 py-1 rounded-full text-xs font-bold border border-orange-100">
+                                 <Flame size={12} fill="currentColor" /> {streak}
+                             </div>
+                        )}
+                    </h1>
                     <p className="text-gray-500 text-sm">Вот что у нас происходит</p>
                  </div>
                  <Avatar user={data.currentUser} size="lg" onClick={onOpenProfile} />

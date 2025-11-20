@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { AppData, ToastMessage, TaskStatus } from './types';
 import { Task, Epic, getNextRecurringDate } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
-import { User, Reward, RewardLog, calculateLevel, InventoryItem } from './family.model';
+import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
 import { TWA, generateId } from './utils';
 import { useFamilyData, useMutations } from './queries';
 
@@ -13,6 +13,9 @@ export const useAppStore = () => {
   const mutations = useMutations();
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // Temporary local state to trigger modal shown only once per session if needed
+  // In a real app, this might be handled via a separate "Session Store"
+  const [bonusData, setBonusData] = useState<{ streak: number, xp: number } | null>(null);
 
   // --- Utils ---
   const addToast = (msg: string, type: 'SUCCESS' | 'INFO' | 'ERROR' = 'SUCCESS') => {
@@ -27,16 +30,82 @@ export const useAppStore = () => {
       setToasts(prev => prev.filter(t => t.id !== id));
   };
 
+  const closeBonusModal = () => setBonusData(null);
+
   // --- Actions Wrappers ---
+
+  const checkDailyStreak = () => {
+      if (!data || !data.currentUser) return;
+      
+      const user = data.currentUser;
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Already logged in today
+      if (user.lastLoginDate === today) return;
+
+      // Calculate date diff
+      const lastDate = user.lastLoginDate ? new Date(user.lastLoginDate) : new Date(0);
+      const nowDate = new Date(today);
+      const diffTime = Math.abs(nowDate.getTime() - lastDate.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+      let newStreak = 1;
+      let bonusXp = 0;
+
+      if (diffDays === 1) {
+          // Consecutive day
+          newStreak = (user.streak || 0) + 1;
+          bonusXp = calculateStreakBonus(newStreak);
+      } else if (diffDays > 1) {
+          // Streak broken (or first login ever)
+          newStreak = 1;
+          bonusXp = 10; // Day 1 bonus
+      } else {
+          // Should be covered by first check, but safety fallback
+          return;
+      }
+
+      // Update User
+      const newXp = user.xp + bonusXp;
+      const updatedUser: User = {
+          ...user,
+          streak: newStreak,
+          lastLoginDate: today,
+          xp: newXp,
+          level: calculateLevel(newXp)
+      };
+
+      // Log it
+      const newLog: RewardLog = {
+          id: generateId(),
+          userId: user.id,
+          action: 'EARNED',
+          amount: bonusXp,
+          description: `Ежедневный бонус (День ${newStreak}) 🔥`,
+          timestamp: Date.now()
+      };
+
+      const newMembers = data.members.map(m => m.id === user.id ? updatedUser : m);
+      const newLogs = [newLog, ...data.rewardLogs];
+
+      mutations.batchUpdate.mutate({
+          currentUser: updatedUser,
+          members: newMembers,
+          rewardLogs: newLogs
+      });
+
+      // Trigger Modal
+      setBonusData({ streak: newStreak, xp: bonusXp });
+      TWA.notification('success');
+  };
 
   const switchUser = (userId: string) => {
       const user = data.members.find(m => m.id === userId);
       if (user) {
-          // In local mode, we just save the current user to the blob.
-          // In real auth mode, this would likely trigger a re-login or session switch.
           mutations.batchUpdate.mutate({ currentUser: user });
           TWA.haptic('medium');
           addToast(`Вы вошли как ${user.name}`, 'INFO');
+          // checkDailyStreak will be called by the useEffect in App when currentUser changes
       }
   };
 
@@ -63,10 +132,6 @@ export const useAppStore = () => {
 
       const isCompleting = status === 'DONE' && task.status !== 'DONE';
       
-      // Complex Logic Calculation
-      // We prepare the FULL state update here and send it as a batch to API
-      // This keeps business logic in frontend for now (Phase 1) but allows moving to backend later
-      
       let updates: Partial<AppData> = {};
       let newTasks = [...data.tasks];
       let newMembers = [...data.members];
@@ -88,7 +153,6 @@ export const useAppStore = () => {
           });
           updates.members = newMembers;
           
-          // If current user is assignee, update current user ref
           if (data.currentUser.id === task.assigneeId) {
               updates.currentUser = newMembers.find(m => m.id === data.currentUser.id);
           }
@@ -143,11 +207,9 @@ export const useAppStore = () => {
           ...(originalTx ? { createdById: originalTx.createdById, date: originalTx.date } : {})
       };
 
-      // Client-side calculation of balances (Mocking Backend Triggers)
       let accs = [...data.accounts];
       let goals = [...data.goals];
 
-      // Revert Old
       if (originalTx) {
           accs = accs.map(a => {
               if (a.id === originalTx.accountId) {
@@ -164,7 +226,6 @@ export const useAppStore = () => {
           });
       }
 
-      // Apply New
       accs = accs.map(a => {
           if (a.id === newTx.accountId) {
               const diff = newTx.type === 'INCOME' ? newTx.amount : -newTx.amount;
@@ -207,7 +268,6 @@ export const useAppStore = () => {
   };
 
   const updateUser = (updatedUser: User) => {
-      // In local mode, we treat this as a batch update of members
       const newMembers = data.members.map(m => m.id === updatedUser.id ? updatedUser : m);
       mutations.batchUpdate.mutate({ 
           members: newMembers,
@@ -234,7 +294,6 @@ export const useAppStore = () => {
           timestamp: Date.now()
       };
 
-      // Create Inventory Item
       const newItem: InventoryItem = {
           id: generateId(),
           rewardId: reward.id,
@@ -283,14 +342,16 @@ export const useAppStore = () => {
   };
 
   return {
-    data: data,
+    data,
     isLoading,
     isError,
     toasts,
+    bonusData,
+    closeBonusModal,
     addToast,
     removeToast,
     actions: {
-      app: { switchUser, resetData },
+      app: { switchUser, resetData, checkDailyStreak },
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
       finance: { saveTransaction, saveAccount, saveBudgets },
       epics: { save: saveEpic },

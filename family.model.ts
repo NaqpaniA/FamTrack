@@ -11,6 +11,9 @@ export interface User {
   xp: number;
   level: number;
   telegramUsername?: string;
+  // Streak System
+  streak: number;
+  lastLoginDate?: string; // ISO Date YYYY-MM-DD
 }
 
 export interface Reward {
@@ -66,4 +69,9 @@ export const getLevelProgress = (xp: number) => {
     const totalNeeded = nextLevelXp - prevLevelXp;
     
     return Math.min((progress / totalNeeded) * 100, 100);
+};
+
+export const calculateStreakBonus = (day: number): number => {
+    if (day >= 7) return 150;
+    return day * 10;
 };

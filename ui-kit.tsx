@@ -5,7 +5,8 @@ import {
   CheckCircle2, 
   Eye,
   EyeOff,
-  Calendar
+  Calendar,
+  Flame
 } from 'lucide-react';
 import { User, ToastMessage } from './types';
 
@@ -87,6 +88,40 @@ export const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean, o
     </div>
   );
 };
+
+export const StreakModal = ({ isOpen, onClose, streak, xp }: { isOpen: boolean, onClose: () => void, streak: number, xp: number }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300" onClick={onClose}>
+             <div className="bg-white w-full max-w-xs rounded-3xl p-6 text-center relative shadow-2xl animate-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
+                 <div className="absolute -top-10 left-1/2 transform -translate-x-1/2">
+                     <div className="bg-orange-500 text-white p-6 rounded-full shadow-lg border-4 border-white">
+                         <Flame size={40} fill="currentColor" className="animate-pulse" />
+                     </div>
+                 </div>
+                 
+                 <div className="mt-8">
+                     <h2 className="text-2xl font-black text-gray-900 mb-2">День {streak}!</h2>
+                     <p className="text-gray-500 text-sm mb-6">
+                         Огонь! Ты заходишь в приложение {streak} дн. подряд. Так держать!
+                     </p>
+                     
+                     <div className="bg-yellow-50 text-yellow-700 font-bold p-3 rounded-xl mb-6 border border-yellow-100">
+                         +{xp} XP
+                     </div>
+
+                     <button 
+                        onClick={onClose} 
+                        className="w-full bg-black text-white py-3 rounded-xl font-bold shadow-lg active:scale-95 transition-transform"
+                    >
+                        Круто!
+                     </button>
+                 </div>
+             </div>
+             {/* Confetti CSS effects could be added here */}
+        </div>
+    )
+}
 
 export const ToastContainer = ({ toasts, removeToast }: { toasts: ToastMessage[], removeToast: (id: string) => void }) => {
     return (

@@ -16,7 +16,7 @@ import { FamilyScreen } from './family.ui';
 import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
 import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
 import { SettingsModal } from './settings.ui';
-import { Modal, ToastContainer } from './ui-kit';
+import { Modal, ToastContainer, StreakModal } from './ui-kit';
 
 // --- Query Client Setup ---
 const queryClient = new QueryClient({
@@ -29,7 +29,7 @@ const queryClient = new QueryClient({
 });
 
 const App = () => {
-  const { data, isLoading, toasts, removeToast, actions } = useAppStore();
+  const { data, isLoading, toasts, bonusData, removeToast, closeBonusModal, actions } = useAppStore();
   
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
   
@@ -55,6 +55,14 @@ const App = () => {
       TWA.enableClosingConfirmation();
       document.body.style.backgroundColor = TWA.backgroundColor;
   }, []);
+
+  // --- Daily Streak Check ---
+  useEffect(() => {
+      if (!isLoading && data.currentUser) {
+          // Check streaks whenever data loads or user changes
+          actions.app.checkDailyStreak();
+      }
+  }, [isLoading, data.currentUser?.id]);
 
   // --- Handlers ---
 
@@ -125,6 +133,16 @@ const App = () => {
   return (
     <div className="min-h-screen text-gray-900 font-sans selection:bg-blue-100 pb-safe-area transition-colors duration-300" style={{ backgroundColor: TWA.backgroundColor }}>
        <ToastContainer toasts={toasts} removeToast={removeToast} />
+       
+       {/* Daily Bonus Modal */}
+       {bonusData && (
+           <StreakModal 
+              isOpen={!!bonusData} 
+              onClose={closeBonusModal} 
+              streak={bonusData.streak} 
+              xp={bonusData.xp} 
+           />
+       )}
 
        {/* Tab Navigation */}
        <div className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-md border-t border-gray-100 flex justify-around py-3 pb-6 z-50 safe-bottom shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
