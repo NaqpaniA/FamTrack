@@ -22,7 +22,8 @@ import {
   PieChart
 } from 'lucide-react';
 import { AppData, Task, Tab, TaskStatus, FinancialGoal, User, Account, Transaction } from './types';
-import { Card, Avatar, Modal, TaskItem, KanbanCard, TransactionItem } from './components';
+import { TaskItem, KanbanCard, TransactionItem } from './components';
+import { Card, Avatar, Modal } from './ui-kit';
 import { CATEGORIES } from './constants';
 import { formatMoney, isVisible, isOverdue, isToday } from './utils';
 

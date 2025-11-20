@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { Epic, Priority, Account, FinancialGoal, BudgetPlan, Transaction, Task, SubTask, User, TaskStatus } from './types';
 import { PRIORITIES, CATEGORIES } from './constants';
-import { Avatar, VisibilitySelector } from './components';
+import { Avatar, VisibilitySelector } from './ui-kit';
 import { formatMoney } from './utils';
 
 // --- Task Editor ---

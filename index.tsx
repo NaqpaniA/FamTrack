@@ -6,7 +6,7 @@ import { Tab, AppData, Task, TaskStatus, Transaction, Account, FinancialGoal, Bu
 import { INITIAL_DATA } from './data';
 import { LocalDatabase, isVisible, getNextRecurringDate } from './utils';
 import { DashboardScreen, TasksScreen, FinanceScreen, FamilyScreen } from './screens';
-import { Modal, ToastContainer } from './components';
+import { Modal, ToastContainer } from './ui-kit';
 import { TaskEditor, TransactionEditor, AccountEditor, BudgetEditor, EpicEditor } from './editors';
 
 const App = () => {
