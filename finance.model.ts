@@ -9,7 +9,12 @@ import {
   Smartphone, 
   Briefcase, 
   ArrowRightLeft, 
-  Circle 
+  Circle,
+  Repeat,
+  Zap,
+  Music,
+  Tv,
+  GraduationCap
 } from 'lucide-react';
 
 // --- Types ---
@@ -17,6 +22,7 @@ import {
 export type TransactionType = 'INCOME' | 'EXPENSE' | 'TRANSFER';
 export type AccountType = 'CARD' | 'CASH' | 'SAVINGS';
 export type GoalStatus = 'ACTIVE' | 'COMPLETED' | 'PAUSED';
+export type SubscriptionFrequency = 'WEEKLY' | 'MONTHLY' | 'YEARLY';
 
 export interface Account {
   id: string;
@@ -28,7 +34,6 @@ export interface Account {
   visibleTo?: string[];
 }
 
-// Legacy Goal tied to specific accounts (e.g. Bank Savings Account)
 export interface FinancialGoal {
   id: string;
   accountId: string;
@@ -41,7 +46,6 @@ export interface FinancialGoal {
   visibleTo?: string[];
 }
 
-// New "Dream Jar" Goal (Virtual, Independent)
 export interface SavingsGoal {
     id: string;
     title: string;
@@ -61,6 +65,20 @@ export interface GoalContribution {
     amount: number;
     message?: string; // "Birthday gift", "From chores"
     date: number;
+}
+
+export interface Subscription {
+    id: string;
+    title: string;
+    amount: number;
+    currency: 'RUB';
+    serviceId?: string; // For preset icons
+    frequency: SubscriptionFrequency;
+    nextPaymentDate: string; // ISO Date
+    isAutoPay: boolean; 
+    accountId: string;
+    categoryId: string;
+    active: boolean;
 }
 
 export interface BudgetPlan {
@@ -101,6 +119,18 @@ export const CATEGORIES: Record<string, TransactionCategory> = {
   salary: { id: 'salary', label: 'Зарплата', icon: React.createElement(Briefcase, { size: 20 }), color: 'bg-green-100 text-green-600', type: 'INCOME' },
   gift: { id: 'gift', label: 'Подарок', icon: React.createElement(Gift, { size: 20 }), color: 'bg-yellow-100 text-yellow-600', type: 'INCOME' },
   transfer: { id: 'transfer', label: 'Перевод', icon: React.createElement(ArrowRightLeft, { size: 20 }), color: 'bg-slate-100 text-slate-600', type: 'BOTH' },
-  goal_contrib: { id: 'goal_contrib', label: 'В копилку', icon: React.createElement(Car, { size: 20 }), color: 'bg-teal-100 text-teal-600', type: 'EXPENSE' }, // System category
+  goal_contrib: { id: 'goal_contrib', label: 'В копилку', icon: React.createElement(Car, { size: 20 }), color: 'bg-teal-100 text-teal-600', type: 'EXPENSE' }, 
   other: { id: 'other', label: 'Другое', icon: React.createElement(Circle, { size: 20 }), color: 'bg-slate-100 text-slate-600', type: 'BOTH' },
+};
+
+export const SERVICE_PRESETS: Record<string, { label: string, color: string, icon: any, defaultAmount: number }> = {
+    netflix: { label: 'Netflix', color: 'bg-red-600 text-white', icon: Tv, defaultAmount: 120000 },
+    youtube: { label: 'YouTube Premium', color: 'bg-red-500 text-white', icon: Tv, defaultAmount: 29900 },
+    spotify: { label: 'Spotify', color: 'bg-green-500 text-white', icon: Music, defaultAmount: 16900 },
+    yandex: { label: 'Яндекс Плюс', color: 'bg-yellow-400 text-black', icon: Music, defaultAmount: 29900 },
+    telegram: { label: 'Telegram Premium', color: 'bg-blue-500 text-white', icon: Smartphone, defaultAmount: 29900 },
+    internet: { label: 'Интернет', color: 'bg-blue-600 text-white', icon: Zap, defaultAmount: 50000 },
+    rent: { label: 'Аренда', color: 'bg-slate-700 text-white', icon: Home, defaultAmount: 3000000 },
+    education: { label: 'Кружки/Школа', color: 'bg-indigo-500 text-white', icon: GraduationCap, defaultAmount: 500000 },
+    custom: { label: 'Другое', color: 'bg-gray-500 text-white', icon: Repeat, defaultAmount: 0 },
 };

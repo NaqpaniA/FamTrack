@@ -1,7 +1,7 @@
 
 import { AppData, User } from './types';
 import { Task, Epic } from './tasks.model';
-import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution } from './finance.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution, Subscription } from './finance.model';
 import { Reward, RewardLog, InventoryItem } from './family.model';
 import { LocalDatabase, generateId } from './utils';
 import { INITIAL_DATA } from './data';
@@ -25,6 +25,7 @@ export interface ApiInterface {
     // New Methods
     saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal>;
     saveContribution(contribution: GoalContribution): Promise<GoalContribution>;
+    saveSubscription(sub: Subscription): Promise<Subscription>;
 
     batchUpdate(updates: Partial<AppData>): Promise<void>; 
 }
@@ -62,6 +63,8 @@ class LocalAdapter implements ApiInterface {
         if (!data.contributions) data.contributions = [];
         // Migration for Shopping List
         if (!data.shoppingList) data.shoppingList = [];
+        // Migration for Subscriptions
+        if (!data.subscriptions) data.subscriptions = [];
         return data;
     }
 
@@ -173,6 +176,18 @@ class LocalAdapter implements ApiInterface {
         });
     }
 
+    async saveSubscription(sub: Subscription): Promise<Subscription> {
+        return this.queue.enqueue(async () => {
+            await this.delay();
+            const data = this.getData();
+            const idx = data.subscriptions.findIndex(s => s.id === sub.id);
+            if (idx >= 0) data.subscriptions[idx] = sub;
+            else data.subscriptions.push(sub);
+            this.saveData(data);
+            return sub;
+        });
+    }
+
     async saveBudgets(budgets: BudgetPlan[]): Promise<BudgetPlan[]> {
         return this.queue.enqueue(async () => {
             await this.delay();
@@ -248,6 +263,7 @@ class SupabaseAdapter implements ApiInterface {
     async saveGoal(goal: FinancialGoal): Promise<FinancialGoal> { return goal; }
     async saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal> { return goal; }
     async saveContribution(c: GoalContribution): Promise<GoalContribution> { return c; }
+    async saveSubscription(sub: Subscription): Promise<Subscription> { return sub; }
     async saveBudgets(budgets: BudgetPlan[]): Promise<BudgetPlan[]> { return budgets; }
     async updateUser(user: User): Promise<User> { return user; }
     async saveRewardLog(log: RewardLog): Promise<RewardLog> { return log; }

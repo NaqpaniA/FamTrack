@@ -211,6 +211,9 @@ const App = () => {
                  onEditTransaction={(t) => { setEditingTransaction(t); setTxModalOpen(true); }}
                  onSaveSavingsGoal={actions.finance.saveSavingsGoal}
                  onContribute={actions.finance.contributeToGoal}
+                 onSaveSubscription={actions.finance.saveSubscription}
+                 onDeleteSubscription={actions.finance.deleteSubscription}
+                 onPaySubscription={actions.finance.paySubscription}
               />
           )}
           {activeTab === 'FAMILY' && (

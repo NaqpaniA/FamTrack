@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { AppData, ToastMessage, TaskStatus } from './types';
 import { Task, Epic, getNextRecurringDate } from './tasks.model';
-import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution } from './finance.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution, Subscription } from './finance.model';
 import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
 import { ShoppingItem, ShoppingCategoryType } from './shopping.model';
 import { TWA, generateId } from './utils';
@@ -404,6 +404,69 @@ export const useAppStore = () => {
       TWA.notification('success');
   };
 
+  // --- Subscriptions Actions ---
+
+  const saveSubscription = (sub: Subscription) => {
+      const isUpdate = data.subscriptions.some(s => s.id === sub.id);
+      const newSubs = isUpdate 
+        ? data.subscriptions.map(s => s.id === sub.id ? sub : s)
+        : [...data.subscriptions, sub];
+      
+      mutations.batchUpdate.mutate({ subscriptions: newSubs });
+      TWA.haptic('light');
+  };
+
+  const deleteSubscription = (id: string) => {
+      if (confirm('Удалить подписку?')) {
+          const newSubs = data.subscriptions.filter(s => s.id !== id);
+          mutations.batchUpdate.mutate({ subscriptions: newSubs });
+          TWA.haptic('medium');
+      }
+  };
+
+  const paySubscription = (sub: Subscription) => {
+      const account = data.accounts.find(a => a.id === sub.accountId);
+      if (!account) {
+          addToast('Счет списания не найден', 'ERROR');
+          return;
+      }
+      
+      if (account.balance < sub.amount) {
+          addToast('Недостаточно средств на счете', 'ERROR');
+          return;
+      }
+
+      // 1. Create Tx
+      const transaction: Transaction = {
+          id: generateId(),
+          amount: sub.amount,
+          title: `Подписка: ${sub.title}`,
+          type: 'EXPENSE',
+          categoryId: sub.categoryId,
+          accountId: sub.accountId,
+          date: new Date().toISOString(),
+          createdById: data.currentUser.id
+      };
+
+      // 2. Update Account
+      const updatedAccount = { ...account, balance: account.balance - sub.amount };
+      const newAccounts = data.accounts.map(a => a.id === account.id ? updatedAccount : a);
+
+      // 3. Update Subscription Date
+      const nextDate = getNextRecurringDate(sub.nextPaymentDate, sub.frequency);
+      const updatedSub = { ...sub, nextPaymentDate: nextDate };
+      const newSubs = data.subscriptions.map(s => s.id === sub.id ? updatedSub : s);
+
+      mutations.batchUpdate.mutate({
+          transactions: [transaction, ...data.transactions],
+          accounts: newAccounts,
+          subscriptions: newSubs
+      });
+
+      addToast('Подписка оплачена!', 'SUCCESS');
+      TWA.notification('success');
+  };
+
   // --- Shopping List Actions ---
 
   const addShoppingItem = (title: string, category: ShoppingCategoryType = 'FOOD') => {
@@ -483,7 +546,7 @@ export const useAppStore = () => {
     actions: {
       app: { switchUser, resetData, checkDailyStreak },
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
-      finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal },
+      finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal, saveSubscription, deleteSubscription, paySubscription },
       epics: { save: saveEpic },
       family: { updateUser, buyReward, consumeItem },
       shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList }

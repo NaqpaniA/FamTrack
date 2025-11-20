@@ -44,6 +44,11 @@ export const INITIAL_DATA: AppData = {
       { id: 'sg2', title: 'Семейный Диснейленд', targetAmount: 50000000, currentAmount: 12000000, status: 'ACTIVE', icon: '🏰', createdById: 'u1', createdAt: Date.now() }
   ],
   contributions: [],
+  subscriptions: [
+      { id: 'sub1', title: 'Яндекс Плюс', amount: 29900, currency: 'RUB', frequency: 'MONTHLY', nextPaymentDate: new Date(Date.now() + 86400000 * 5).toISOString(), isAutoPay: true, accountId: 'ac1', categoryId: 'services', serviceId: 'yandex', active: true },
+      { id: 'sub2', title: 'Аренда', amount: 4500000, currency: 'RUB', frequency: 'MONTHLY', nextPaymentDate: new Date(Date.now() + 86400000 * 2).toISOString(), isAutoPay: false, accountId: 'ac1', categoryId: 'home', serviceId: 'rent', active: true },
+      { id: 'sub3', title: 'Интернет', amount: 65000, currency: 'RUB', frequency: 'MONTHLY', nextPaymentDate: new Date(Date.now() - 86400000).toISOString(), isAutoPay: false, accountId: 'ac1', categoryId: 'services', serviceId: 'internet', active: true } // Overdue
+  ],
   budgets: [
       { categoryId: 'food', limit: 6000000 }, // 60k RUB
       { categoryId: 'home', limit: 4000000 }, // 40k RUB

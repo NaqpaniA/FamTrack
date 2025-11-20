@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType } from './finance.model';
+import { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType, Subscription } from './finance.model';
 import { Task, Epic, TaskStatus, Priority, Frequency } from './tasks.model';
 import { User, Reward, RewardLog, Role, InventoryItem } from './family.model';
 import { ShoppingItem } from './shopping.model';
@@ -16,6 +16,7 @@ export interface AppData {
   goals: FinancialGoal[]; // Legacy/Account-bound
   savingsGoals: SavingsGoal[]; // New Dream Jars
   contributions: GoalContribution[]; // Logs for Dream Jars
+  subscriptions: Subscription[]; // New Recurring Payments
   budgets: BudgetPlan[];
   transactions: Transaction[];
   rewards: Reward[];
@@ -31,7 +32,7 @@ export interface ToastMessage {
 }
 
 // Re-export domain types for convenience
-export type { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType };
+export type { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType, Subscription };
 export type { Task, Epic, TaskStatus, Priority, Frequency };
 export type { User, Reward, RewardLog, Role, InventoryItem };
 export type { ShoppingItem };
