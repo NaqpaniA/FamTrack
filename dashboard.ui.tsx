@@ -6,13 +6,15 @@ import {
   Sparkles, 
   Wallet, 
   CheckSquare,
-  Flame
+  Flame,
+  Activity
 } from 'lucide-react';
 import { AppData, Task, Tab } from './types';
 import { TaskItem } from './tasks.ui';
 import { Avatar } from './ui-kit';
 import { formatMoney, isVisible } from './utils';
 import { isOverdue, isToday } from './tasks.model';
+import { EVENT_CONFIG } from './events.model';
 
 export const DashboardScreen = ({ 
     data, 
@@ -30,6 +32,7 @@ export const DashboardScreen = ({
     const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser.id));
     const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser.id));
     const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser.id));
+    const recentEvents = (data.events || []).slice(0, 5);
 
     // Active Tasks: Not done AND (Overdue OR Today OR No Date)
     const activeTasksCount = visibleTasks.filter(t => {
@@ -40,6 +43,16 @@ export const DashboardScreen = ({
 
     const totalBalance = visibleAccounts.reduce((sum, acc) => sum + acc.balance, 0);
     const streak = data.currentUser.streak || 0;
+
+    const formatTimeAgo = (timestamp: number) => {
+        const seconds = Math.floor((Date.now() - timestamp) / 1000);
+        if (seconds < 60) return 'Только что';
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes} м. назад`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours} ч. назад`;
+        return 'Давно';
+    };
 
     return (
         <div className="p-4 pb-24 space-y-6 animate-in fade-in duration-300">
@@ -164,6 +177,46 @@ export const DashboardScreen = ({
                     <div className="p-3 text-center border-t border-gray-50">
                          <button onClick={() => onNavigate('TASKS')} className="text-xs text-gray-400 font-bold uppercase tracking-wider">Посмотреть все задачи</button>
                     </div>
+                </div>
+            </div>
+
+            {/* Activity Feed */}
+            <div>
+                <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-lg font-bold flex items-center gap-2"><Activity size={20} /> Активность</h2>
+                </div>
+                <div className="space-y-3">
+                    {recentEvents.length === 0 ? (
+                        <div className="text-center p-4 bg-gray-50 rounded-2xl text-gray-400 text-sm border border-dashed border-gray-200">
+                            Пока тишина...
+                        </div>
+                    ) : (
+                        recentEvents.map(event => {
+                            const actor = data.members.find(m => m.id === event.actorId);
+                            const config = EVENT_CONFIG[event.type];
+                            if (!actor || !config) return null;
+
+                            return (
+                                <div key={event.id} className="flex gap-3 bg-white p-3 rounded-2xl shadow-sm border border-gray-100 animate-in slide-in-from-bottom-2">
+                                    <div className="relative">
+                                        <Avatar user={actor} size="md" />
+                                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center ${config.color} border-2 border-white`}>
+                                            <config.icon size={10} />
+                                        </div>
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="text-xs text-gray-400 mb-0.5 flex justify-between">
+                                            <span>{actor.name}</span>
+                                            <span>{formatTimeAgo(event.timestamp)}</span>
+                                        </div>
+                                        <div className="text-sm font-medium text-gray-900 leading-tight">
+                                            {config.format(event.payload)}
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        })
+                    )}
                 </div>
             </div>
         </div>

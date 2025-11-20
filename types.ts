@@ -4,6 +4,7 @@ import { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Tran
 import { Task, Epic, TaskStatus, Priority, Frequency } from './tasks.model';
 import { User, Reward, RewardLog, Role, InventoryItem } from './family.model';
 import { ShoppingItem } from './shopping.model';
+import { AppEvent } from './events.model';
 
 export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY' | 'SHOP';
 
@@ -23,6 +24,7 @@ export interface AppData {
   rewardLogs: RewardLog[];
   inventory: InventoryItem[];
   shoppingList: ShoppingItem[];
+  events: AppEvent[];
 }
 
 export interface ToastMessage {
@@ -36,3 +38,4 @@ export type { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan,
 export type { Task, Epic, TaskStatus, Priority, Frequency };
 export type { User, Reward, RewardLog, Role, InventoryItem };
 export type { ShoppingItem };
+export type { AppEvent };

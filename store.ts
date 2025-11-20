@@ -5,7 +5,8 @@ import { Task, Epic, getNextRecurringDate } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution, Subscription } from './finance.model';
 import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
 import { ShoppingItem, ShoppingCategoryType } from './shopping.model';
-import { TWA, generateId } from './utils';
+import { AppEvent, EventType } from './events.model';
+import { TWA, generateId, formatMoney } from './utils';
 import { useFamilyData, useMutations } from './queries';
 
 export const useAppStore = () => {
@@ -30,6 +31,15 @@ export const useAppStore = () => {
   };
 
   const closeBonusModal = () => setBonusData(null);
+
+  // Helper to create Event
+  const createEvent = (type: EventType, payload: any): AppEvent => ({
+      id: generateId(),
+      type,
+      actorId: data.currentUser?.id || 'unknown',
+      payload,
+      timestamp: Date.now()
+  });
 
   // --- Actions Wrappers ---
 
@@ -132,18 +142,24 @@ export const useAppStore = () => {
       let newTasks = [...data.tasks];
       let newMembers = [...data.members];
       let newLogs = [...data.rewardLogs];
+      let newEvents = [...(data.events || [])];
 
       // 1. Update Status
       const updatedTask = { ...task, status };
       newTasks = newTasks.map(t => t.id === id ? updatedTask : t);
       updates.tasks = newTasks;
 
-      // 2. Handle XP
+      // 2. Handle XP & Event
       if (isCompleting) {
           newMembers = newMembers.map(u => {
               if (u.id === task.assigneeId) {
                   const newXp = u.xp + task.points;
-                  return { ...u, xp: newXp, level: calculateLevel(newXp) };
+                  const newLevel = calculateLevel(newXp);
+                  
+                  if (newLevel > u.level) {
+                      newEvents.unshift(createEvent('LEVEL_UP', { level: newLevel, userId: u.id }));
+                  }
+                  return { ...u, xp: newXp, level: newLevel };
               }
               return u;
           });
@@ -162,6 +178,10 @@ export const useAppStore = () => {
               timestamp: Date.now()
           });
           updates.rewardLogs = newLogs;
+
+          // Log Event
+          newEvents.unshift(createEvent('TASK_COMPLETED', { title: task.title, points: task.points }));
+          updates.events = newEvents;
 
           // 3. Recurring Logic
           if (task.isRecurring) {
@@ -301,12 +321,16 @@ export const useAppStore = () => {
       const newMembers = data.members.map(m => m.id === updatedUser.id ? updatedUser : m);
       const newLogs = [newLog, ...data.rewardLogs];
       const newInventory = [newItem, ...(data.inventory || [])];
+      
+      // Event
+      const newEvents = [createEvent('REWARD_BOUGHT', { title: reward.title }), ...(data.events || [])];
 
       mutations.batchUpdate.mutate({
           currentUser: updatedUser,
           members: newMembers,
           rewardLogs: newLogs,
-          inventory: newInventory
+          inventory: newInventory,
+          events: newEvents
       });
 
       addToast(`Куплено! Предмет в рюкзаке.`, 'SUCCESS');
@@ -393,11 +417,15 @@ export const useAppStore = () => {
       };
       const newTransactions = [transaction, ...data.transactions];
 
+      // Event
+      const newEvents = [createEvent('GOAL_CONTRIBUTION', { goalTitle: goal.title, amountStr: formatMoney(amount) }), ...(data.events || [])];
+
       mutations.batchUpdate.mutate({
           accounts: newAccounts,
           savingsGoals: newGoals,
           contributions: newContributions,
-          transactions: newTransactions
+          transactions: newTransactions,
+          events: newEvents
       });
 
       addToast(`Отложено в копилку! 💰`, 'SUCCESS');
@@ -457,10 +485,14 @@ export const useAppStore = () => {
       const updatedSub = { ...sub, nextPaymentDate: nextDate };
       const newSubs = data.subscriptions.map(s => s.id === sub.id ? updatedSub : s);
 
+      // Event
+      const newEvents = [createEvent('SUBSCRIPTION_PAID', { title: sub.title }), ...(data.events || [])];
+
       mutations.batchUpdate.mutate({
           transactions: [transaction, ...data.transactions],
           accounts: newAccounts,
-          subscriptions: newSubs
+          subscriptions: newSubs,
+          events: newEvents
       });
 
       addToast('Подписка оплачена!', 'SUCCESS');
@@ -523,11 +555,15 @@ export const useAppStore = () => {
           newAccounts = newAccounts.map(a => a.id === account.id ? updatedAccount : a);
       }
 
+      // Event
+      const newEvents = [createEvent('SHOPPING_CHECKOUT', { count: completedItems.length, totalStr: formatMoney(totalAmount) }), ...(data.events || [])];
+
       // 3. Update Transactions and List
       mutations.batchUpdate.mutate({
           shoppingList: remainingItems,
           transactions: [transaction, ...data.transactions],
-          accounts: newAccounts
+          accounts: newAccounts,
+          events: newEvents
       });
 
       addToast('Список покупок оплачен!', 'SUCCESS');

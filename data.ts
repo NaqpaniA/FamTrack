@@ -69,5 +69,6 @@ export const INITIAL_DATA: AppData = {
   shoppingList: [
       { id: 's1', title: 'Молоко', category: 'FOOD', addedById: 'u2', isCompleted: false, createdAt: Date.now() },
       { id: 's2', title: 'Губки для посуды', category: 'HOME', addedById: 'u2', isCompleted: false, createdAt: Date.now() }
-  ]
+  ],
+  events: []
 };
