@@ -20,7 +20,7 @@ import { Avatar, Card, Modal } from './ui-kit';
 
 // --- Components ---
 
-export const MemberCard = ({ user, isCurrentUser }: { user: User, isCurrentUser: boolean }) => {
+export const MemberCard = ({ user, isCurrentUser }: { key?: React.Key, user: User, isCurrentUser: boolean }) => {
     const nextLevelXp = getNextLevelXp(user.level);
     const progress = getLevelProgress(user.xp);
 
@@ -59,7 +59,7 @@ export const MemberCard = ({ user, isCurrentUser }: { user: User, isCurrentUser:
     );
 };
 
-export const RewardCard = ({ reward, userXp, onBuy }: { reward: Reward, userXp: number, onBuy: () => void }) => {
+export const RewardCard = ({ reward, userXp, onBuy }: { key?: React.Key, reward: Reward, userXp: number, onBuy: () => void }) => {
     const canAfford = userXp >= reward.cost;
     
     return (
@@ -89,7 +89,7 @@ export const RewardCard = ({ reward, userXp, onBuy }: { reward: Reward, userXp: 
     )
 };
 
-export const InventoryItemCard = ({ item, reward, onConsume }: { item: InventoryItem, reward?: Reward, onConsume: () => void }) => {
+export const InventoryItemCard = ({ item, reward, onConsume }: { key?: React.Key, item: InventoryItem, reward?: Reward, onConsume: () => void }) => {
     if (!reward) return null;
     const isUsed = item.status === 'USED';
 

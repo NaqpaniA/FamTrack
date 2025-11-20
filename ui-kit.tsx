@@ -16,7 +16,7 @@ export const Card = ({ children, className = '', onClick }: { children?: React.R
   </div>
 );
 
-export const Avatar = ({ user, size = 'sm', selected = false, onClick }: { user?: User, size?: 'sm' | 'md' | 'lg' | 'xl', selected?: boolean, onClick?: () => void }) => {
+export const Avatar = ({ user, size = 'sm', selected = false, onClick }: { key?: React.Key, user?: User, size?: 'sm' | 'md' | 'lg' | 'xl', selected?: boolean, onClick?: () => void }) => {
   const sizes = { sm: 'w-8 h-8 text-sm', md: 'w-10 h-10 text-lg', lg: 'w-14 h-14 text-2xl', xl: 'w-20 h-20 text-4xl' };
   return (
     <div 
