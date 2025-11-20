@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Layout, CheckSquare, Wallet, Users, Loader2 } from 'lucide-react';
+import { Layout, CheckSquare, Wallet, Users, Loader2, ShoppingBag } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { Tab } from './types';
@@ -15,6 +15,7 @@ import { DashboardScreen } from './dashboard.ui';
 import { FamilyScreen } from './family.ui';
 import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
 import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
+import { ShoppingScreen } from './shopping.ui';
 import { SettingsModal } from './settings.ui';
 import { Modal, ToastContainer, StreakModal } from './ui-kit';
 
@@ -154,6 +155,10 @@ const App = () => {
               <CheckSquare size={24} strokeWidth={activeTab === 'TASKS' ? 2.5 : 2} />
               <span className="text-[10px] font-bold">Задачи</span>
           </button>
+           <button onClick={() => handleNavigate('SHOP')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'SHOP' ? 'text-black scale-105' : 'text-gray-400'}`}>
+              <ShoppingBag size={24} strokeWidth={activeTab === 'SHOP' ? 2.5 : 2} />
+              <span className="text-[10px] font-bold">Список</span>
+          </button>
           <button onClick={() => handleNavigate('FINANCE')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'FINANCE' ? 'text-black scale-105' : 'text-gray-400'}`}>
               <Wallet size={24} strokeWidth={activeTab === 'FINANCE' ? 2.5 : 2} />
               <span className="text-[10px] font-bold">Финансы</span>
@@ -182,6 +187,15 @@ const App = () => {
                 onAddTask={() => { setEditingTask(null); setTaskModalOpen(true); }}
                 onStatusChange={actions.tasks.toggleStatus}
                 activeFilterEpicId={activeEpicFilter}
+              />
+          )}
+          {activeTab === 'SHOP' && (
+              <ShoppingScreen
+                  data={data}
+                  onAddItem={actions.shopping.addItem}
+                  onToggleItem={actions.shopping.toggle}
+                  onDeleteItem={actions.shopping.delete}
+                  onCheckout={actions.shopping.checkout}
               />
           )}
           {activeTab === 'FINANCE' && (

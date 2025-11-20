@@ -3,8 +3,9 @@ import React from 'react';
 import { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType } from './finance.model';
 import { Task, Epic, TaskStatus, Priority, Frequency } from './tasks.model';
 import { User, Reward, RewardLog, Role, InventoryItem } from './family.model';
+import { ShoppingItem } from './shopping.model';
 
-export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY';
+export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY' | 'SHOP';
 
 export interface AppData {
   currentUser: User;
@@ -19,7 +20,8 @@ export interface AppData {
   transactions: Transaction[];
   rewards: Reward[];
   rewardLogs: RewardLog[];
-  inventory: InventoryItem[]; 
+  inventory: InventoryItem[];
+  shoppingList: ShoppingItem[];
 }
 
 export interface ToastMessage {
@@ -32,3 +34,4 @@ export interface ToastMessage {
 export type { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType };
 export type { Task, Epic, TaskStatus, Priority, Frequency };
 export type { User, Reward, RewardLog, Role, InventoryItem };
+export type { ShoppingItem };

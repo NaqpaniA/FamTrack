@@ -4,6 +4,7 @@ import { AppData, ToastMessage, TaskStatus } from './types';
 import { Task, Epic, getNextRecurringDate } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution } from './finance.model';
 import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
+import { ShoppingItem, ShoppingCategoryType } from './shopping.model';
 import { TWA, generateId } from './utils';
 import { useFamilyData, useMutations } from './queries';
 
@@ -336,8 +337,6 @@ export const useAppStore = () => {
       addToast('Награда активирована! Наслаждайся.', 'SUCCESS');
   };
 
-  // --- New Savings Goals Actions ---
-
   const saveSavingsGoal = (goal: SavingsGoal) => {
       const isUpdate = !!data.savingsGoals.find(g => g.id === goal.id);
       let newGoals = [...data.savingsGoals];
@@ -366,15 +365,12 @@ export const useAppStore = () => {
           return;
       }
 
-      // 1. Update Account (Deduct)
       const updatedAccount = { ...account, balance: account.balance - amount };
       const newAccounts = data.accounts.map(a => a.id === account.id ? updatedAccount : a);
 
-      // 2. Update Goal (Add)
       const updatedGoal = { ...goal, currentAmount: goal.currentAmount + amount };
       const newGoals = data.savingsGoals.map(g => g.id === goal.id ? updatedGoal : g);
 
-      // 3. Create Contribution Record
       const contribution: GoalContribution = {
           id: generateId(),
           goalId,
@@ -385,12 +381,11 @@ export const useAppStore = () => {
       };
       const newContributions = [contribution, ...data.contributions];
 
-      // 4. Create Transaction Record (So we know where money went in history)
       const transaction: Transaction = {
           id: generateId(),
           amount,
-          type: 'EXPENSE', // Technically a transfer, but leaves the "Wallet"
-          categoryId: 'goal_contrib', // System category
+          type: 'EXPENSE',
+          categoryId: 'goal_contrib',
           accountId: sourceAccountId,
           title: `В копилку: ${goal.title}`,
           date: new Date().toISOString(),
@@ -409,6 +404,73 @@ export const useAppStore = () => {
       TWA.notification('success');
   };
 
+  // --- Shopping List Actions ---
+
+  const addShoppingItem = (title: string, category: ShoppingCategoryType = 'FOOD') => {
+      const newItem: ShoppingItem = {
+          id: generateId(),
+          title,
+          category,
+          addedById: data.currentUser.id,
+          isCompleted: false,
+          createdAt: Date.now()
+      };
+      const newList = [newItem, ...(data.shoppingList || [])];
+      mutations.batchUpdate.mutate({ shoppingList: newList });
+      TWA.haptic('light');
+  };
+
+  const toggleShoppingItem = (id: string) => {
+      const newList = (data.shoppingList || []).map(item => 
+          item.id === id ? { ...item, isCompleted: !item.isCompleted } : item
+      );
+      mutations.batchUpdate.mutate({ shoppingList: newList });
+      TWA.selection();
+  };
+
+  const deleteShoppingItem = (id: string) => {
+      const newList = (data.shoppingList || []).filter(item => item.id !== id);
+      mutations.batchUpdate.mutate({ shoppingList: newList });
+      TWA.haptic('light');
+  };
+
+  const checkoutShoppingList = (totalAmount: number, accountId: string) => {
+      const completedItems = (data.shoppingList || []).filter(i => i.isCompleted);
+      const remainingItems = (data.shoppingList || []).filter(i => !i.isCompleted);
+
+      if (completedItems.length === 0) return;
+
+      // 1. Create Transaction
+      const transaction: Transaction = {
+          id: generateId(),
+          amount: totalAmount,
+          type: 'EXPENSE',
+          categoryId: 'food', // Defaulting to food for simplicity, could be smart
+          accountId,
+          title: `Продукты (${completedItems.length} шт)`,
+          date: new Date().toISOString(),
+          createdById: data.currentUser.id
+      };
+
+      // 2. Deduct from Account
+      const account = data.accounts.find(a => a.id === accountId);
+      let newAccounts = [...data.accounts];
+      if (account) {
+          const updatedAccount = { ...account, balance: account.balance - totalAmount };
+          newAccounts = newAccounts.map(a => a.id === account.id ? updatedAccount : a);
+      }
+
+      // 3. Update Transactions and List
+      mutations.batchUpdate.mutate({
+          shoppingList: remainingItems,
+          transactions: [transaction, ...data.transactions],
+          accounts: newAccounts
+      });
+
+      addToast('Список покупок оплачен!', 'SUCCESS');
+      TWA.notification('success');
+  };
+
   return {
     data,
     isLoading,
@@ -423,7 +485,8 @@ export const useAppStore = () => {
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
       finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal },
       epics: { save: saveEpic },
-      family: { updateUser, buyReward, consumeItem }
+      family: { updateUser, buyReward, consumeItem },
+      shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList }
     }
   };
 };

@@ -60,6 +60,8 @@ class LocalAdapter implements ApiInterface {
         // Migration for Savings Goals
         if (!data.savingsGoals) data.savingsGoals = [];
         if (!data.contributions) data.contributions = [];
+        // Migration for Shopping List
+        if (!data.shoppingList) data.shoppingList = [];
         return data;
     }
 
