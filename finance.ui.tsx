@@ -67,7 +67,7 @@ export const TransactionItem = ({ transaction, user }: { transaction: Transactio
   );
 };
 
-export const GoalCard = ({ goal, onClick }: { goal: SavingsGoal, onClick: () => void }) => {
+export const GoalCard = ({ goal, onClick }: { key?: React.Key, goal: SavingsGoal, onClick: () => void }) => {
     const safeTarget = goal.targetAmount || 1; // Prevent division by zero
     const progress = Math.min((goal.currentAmount / safeTarget) * 100, 100);
     
@@ -108,7 +108,7 @@ export const GoalCard = ({ goal, onClick }: { goal: SavingsGoal, onClick: () => 
     )
 };
 
-export const SubscriptionCard = ({ sub, onPay, onEdit }: { sub: Subscription, onPay: () => void, onEdit: () => void }) => {
+export const SubscriptionCard = ({ sub, onPay, onEdit }: { key?: React.Key, sub: Subscription, onPay: () => void, onEdit: () => void }) => {
     const preset = sub.serviceId ? SERVICE_PRESETS[sub.serviceId] : SERVICE_PRESETS.custom;
     const today = new Date();
     today.setHours(0,0,0,0);
@@ -415,7 +415,7 @@ export const SavingsGoalEditor = ({ onSave, goal }: { onSave: (g: SavingsGoal) =
     )
 };
 
-export const TransactionEditor = ({ onSave, accounts, goals, transaction }: { onSave: (data: any) => void, accounts: Account[], goals: FinancialGoal[], transaction?: Transaction | null }) => {
+export const TransactionEditor = ({ onSave, accounts, goals, transaction }: { key?: React.Key, onSave: (data: any) => void, accounts: Account[], goals: FinancialGoal[], transaction?: Transaction | null }) => {
     const [amount, setAmount] = useState(transaction ? (transaction.amount / 100).toString() : '');
     const [title, setTitle] = useState(transaction?.title || '');
     const [type, setType] = useState<'INCOME' | 'EXPENSE'>(transaction?.type === 'INCOME' ? 'INCOME' : 'EXPENSE');
@@ -514,7 +514,7 @@ export const TransactionEditor = ({ onSave, accounts, goals, transaction }: { on
     )
 }
 
-export const AccountEditor = ({ onSave, members, epics, account }: { onSave: (acc: Account, goal?: FinancialGoal) => void, members: User[], epics: Epic[], account?: Account | null }) => {
+export const AccountEditor = ({ onSave, members, epics, account }: { key?: React.Key, onSave: (acc: Account, goal?: FinancialGoal) => void, members: User[], epics: Epic[], account?: Account | null }) => {
     const [name, setName] = useState(account?.name || '');
     const [balance, setBalance] = useState(account ? (account.balance / 100).toString() : '');
     const [type, setType] = useState<any>(account?.type || 'CARD');

@@ -25,7 +25,7 @@ import { FinancialGoal } from './finance.model';
 
 // --- Components ---
 
-export const TaskItem: React.FC<{ task: Task, assignee?: User, epic?: Epic, onClick: (task: Task) => void, onStatusChange?: (status: TaskStatus) => void }> = ({ task, assignee, epic, onClick, onStatusChange }) => {
+export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, epic?: Epic, onClick: (task: Task) => void, onStatusChange?: (status: TaskStatus) => void }> = ({ task, assignee, epic, onClick, onStatusChange }) => {
   const completedSub = task.subtasks.filter(s => s.isCompleted).length;
   const totalSub = task.subtasks.length;
   const priorityConfig = PRIORITIES[task.priority] || PRIORITIES.LOW;
@@ -99,7 +99,7 @@ export const TaskItem: React.FC<{ task: Task, assignee?: User, epic?: Epic, onCl
   );
 };
 
-export const KanbanCard: React.FC<{ task: Task, assignee?: User, epic?: Epic, onClick: () => void }> = ({ task, assignee, epic, onClick }) => {
+export const KanbanCard: React.FC<{ key?: React.Key, task: Task, assignee?: User, epic?: Epic, onClick: () => void }> = ({ task, assignee, epic, onClick }) => {
     const priorityConfig = PRIORITIES[task.priority];
     const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
 
@@ -137,7 +137,7 @@ export const KanbanCard: React.FC<{ task: Task, assignee?: User, epic?: Epic, on
 
 // --- Editors ---
 
-export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser }: { task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, members: User[], epics: Epic[], currentUser: User }) => {
+export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, members: User[], epics: Epic[], currentUser: User }) => {
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Priority>(task?.priority || 'MEDIUM');
@@ -345,7 +345,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   );
 };
 
-export const EpicEditor = ({ onSave, members, goals = [], initialData }: { onSave: (epic: Epic) => void, members: User[], goals?: FinancialGoal[], initialData?: Partial<Epic> }) => {
+export const EpicEditor = ({ onSave, members, goals = [], initialData }: { key?: React.Key, onSave: (epic: Epic) => void, members: User[], goals?: FinancialGoal[], initialData?: Partial<Epic> }) => {
     const [title, setTitle] = useState(initialData?.title || '');
     const [priority, setPriority] = useState<Priority>(initialData?.priority || 'MEDIUM');
     const [color, setColor] = useState(initialData?.color || 'bg-blue-500');
