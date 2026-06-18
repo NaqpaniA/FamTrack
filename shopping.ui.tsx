@@ -13,7 +13,7 @@ import {
 import { AppData, Account } from './types';
 import { ShoppingItem, SHOPPING_CATEGORIES, ShoppingCategoryType } from './shopping.model';
 import { formatMoney, isVisible } from './utils';
-import { Avatar, Modal } from './ui-kit';
+import { Modal, Panel, Screen } from './ui-kit';
 
 export const ShoppingScreen = ({ 
     data, 
@@ -43,31 +43,31 @@ export const ShoppingScreen = ({
     };
 
     return (
-        <div className="p-4 pb-24 min-h-screen flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-                <h1 className="text-2xl font-bold flex items-center gap-2">
-                    <ShoppingBag className="text-blue-500" /> Список
+        <Screen className="flex flex-col">
+            <div className="flex items-center justify-between">
+                <h1 className="text-[24px] leading-tight font-bold flex items-center gap-2">
+                    <ShoppingBag className="text-blue-500" size={22} /> Список
                 </h1>
-                <div className="text-sm text-gray-400 font-medium">
+                <div className="text-[13px] text-gray-400 font-medium">
                     {activeItems.length} осталось
                 </div>
             </div>
 
             {/* Input Area */}
-            <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 mb-6">
+            <Panel className="p-3">
                 <div className="flex items-center gap-2 mb-3">
                     <input 
                         value={newItemTitle}
                         onChange={e => setNewItemTitle(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && handleAdd()}
                         placeholder="Что нужно купить?"
-                        className="flex-1 text-lg outline-none placeholder-gray-300 font-medium"
+                        className="flex-1 text-[16px] outline-none placeholder-gray-300 font-medium"
                         autoFocus
                     />
                     <button 
                         onClick={handleAdd}
                         disabled={!newItemTitle}
-                        className="bg-blue-500 text-white p-2 rounded-xl disabled:opacity-50 disabled:bg-gray-200"
+                        className="bg-blue-500 text-white p-2 rounded-[10px] disabled:opacity-50 disabled:bg-gray-200"
                     >
                         <Plus size={20} />
                     </button>
@@ -83,13 +83,13 @@ export const ShoppingScreen = ({
                         </button>
                     ))}
                 </div>
-            </div>
+            </Panel>
 
             {/* Active Items */}
-            <div className="space-y-2 mb-6">
+            <div className="space-y-2">
                 {activeItems.length === 0 && completedItems.length === 0 && (
-                    <div className="text-center py-10 text-gray-400">
-                        <Utensils size={48} className="mx-auto mb-3 opacity-20" />
+                    <div className="text-center py-8 text-gray-400">
+                        <Utensils size={42} className="mx-auto mb-3 opacity-20" />
                         <p>Список пуст. Добавьте что-нибудь!</p>
                     </div>
                 )}
@@ -99,7 +99,7 @@ export const ShoppingScreen = ({
                     const owner = data.members.find(m => m.id === item.addedById);
                     
                     return (
-                        <div key={item.id} className="flex items-center gap-3 bg-white p-3 rounded-xl shadow-sm border border-gray-50 active:scale-[0.99] transition-transform" onClick={() => onToggleItem(item.id)}>
+                        <div key={item.id} className="flex items-center gap-3 app-panel p-3 active:scale-[0.99] transition-transform" onClick={() => onToggleItem(item.id)}>
                             <Circle size={24} className="text-gray-300" />
                             <div className="flex-1">
                                 <div className="font-medium text-gray-900">{item.title}</div>
@@ -133,7 +133,7 @@ export const ShoppingScreen = ({
 
             {/* Floating Checkout Button */}
             {completedItems.length > 0 && (
-                <div className="fixed bottom-24 left-0 right-0 flex justify-center z-40 pointer-events-none">
+                <div className="fixed left-0 right-0 flex justify-center z-40 pointer-events-none" style={{ bottom: 'calc(var(--bottom-nav-height) + 14px + env(safe-area-inset-bottom))' }}>
                     <button 
                         onClick={() => setCheckoutOpen(true)}
                         className="pointer-events-auto bg-black text-white px-6 py-3 rounded-full font-bold shadow-2xl flex items-center gap-2 animate-in slide-in-from-bottom-10 active:scale-95 transition-transform"
@@ -148,10 +148,10 @@ export const ShoppingScreen = ({
                 isOpen={isCheckoutOpen}
                 onClose={() => setCheckoutOpen(false)}
                 itemCount={completedItems.length}
-                accounts={data.accounts.filter(a => isVisible(a, data.currentUser.id))}
+                accounts={data.accounts.filter(a => isVisible(a, data.currentUser))}
                 onConfirm={onCheckout}
             />
-        </div>
+        </Screen>
     );
 };
 

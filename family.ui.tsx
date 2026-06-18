@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { AppData } from './types';
 import { User, Reward, InventoryItem, calculateLevel, getLevelProgress, getNextLevelXp } from './family.model';
-import { Avatar, Card, Modal } from './ui-kit';
+import { Avatar, Modal, Screen, SectionHeader, SegmentedControl } from './ui-kit';
 
 // --- Components ---
 
@@ -25,7 +25,7 @@ export const MemberCard = ({ user, isCurrentUser }: { key?: React.Key, user: Use
     const progress = getLevelProgress(user.xp);
 
     return (
-        <div className={`bg-white p-4 rounded-2xl shadow-sm border ${isCurrentUser ? 'border-blue-200 ring-1 ring-blue-50' : 'border-gray-100'} relative overflow-hidden`}>
+        <div className={`bg-white p-3 rounded-[14px] shadow-sm border ${isCurrentUser ? 'border-blue-200 ring-1 ring-blue-50' : 'border-gray-100'} relative overflow-hidden`}>
              {user.role === 'OWNER' && <Crown size={16} className="absolute top-3 right-3 text-yellow-500" />}
              
              <div className="flex flex-col items-center text-center mb-3 relative z-10">
@@ -35,7 +35,7 @@ export const MemberCard = ({ user, isCurrentUser }: { key?: React.Key, user: Use
                         Lvl {user.level}
                     </div>
                 </div>
-                <div className="font-bold text-lg leading-tight">{user.name}</div>
+                <div className="font-bold text-[15px] leading-tight">{user.name}</div>
                 <div className="text-xs text-gray-400 capitalize mb-1">{user.role.toLowerCase()}</div>
                 <div className="flex items-center gap-1 text-yellow-600 font-bold text-sm bg-yellow-50 px-2 py-0.5 rounded-lg">
                     <Star size={12} className="fill-current" />
@@ -63,8 +63,8 @@ export const RewardCard = ({ reward, userXp, onBuy }: { key?: React.Key, reward:
     const canAfford = userXp >= reward.cost;
     
     return (
-        <div className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center text-center relative overflow-hidden group active:scale-95 transition-transform">
-            <div className="text-4xl mb-2 transform group-hover:scale-110 transition-transform duration-300">{reward.icon}</div>
+        <div className="bg-white p-3 rounded-[14px] shadow-sm border border-gray-100 flex flex-col items-center text-center relative overflow-hidden group active:scale-95 transition-transform min-h-[150px]">
+            <div className="text-3xl mb-2 transform group-hover:scale-110 transition-transform duration-300">{reward.icon}</div>
             <div className="font-bold text-sm leading-tight mb-1">{reward.title}</div>
             {reward.description && <div className="text-[10px] text-gray-400 mb-2 line-clamp-2">{reward.description}</div>}
             
@@ -94,7 +94,7 @@ export const InventoryItemCard = ({ item, reward, onConsume }: { key?: React.Key
     const isUsed = item.status === 'USED';
 
     return (
-        <div className={`relative p-4 rounded-2xl border flex flex-col items-center text-center transition-all ${isUsed ? 'bg-gray-50 border-gray-100 opacity-60 grayscale' : 'bg-white border-blue-100 shadow-sm ring-1 ring-blue-50/50'}`}>
+        <div className={`relative p-3 rounded-[14px] border flex flex-col items-center text-center transition-all ${isUsed ? 'bg-gray-50 border-gray-100 opacity-60 grayscale' : 'bg-white border-blue-100 shadow-sm ring-1 ring-blue-50/50'}`}>
              {isUsed && (
                  <div className="absolute inset-0 flex items-center justify-center z-10">
                      <div className="bg-gray-800 text-white text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 rotate-[-10deg]">
@@ -156,35 +156,24 @@ export const FamilyScreen = ({
     };
 
     return (
-        <div className="p-4 pb-24 min-h-screen flex flex-col space-y-6">
+        <Screen className="flex flex-col">
              {/* Header */}
              <div className="flex items-center justify-between flex-wrap gap-2">
-                 <h1 className="text-2xl font-bold">Семья</h1>
-                 <div className="flex bg-gray-100 p-1 rounded-xl">
-                    <button 
-                        onClick={() => setActiveTab('MEMBERS')} 
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'MEMBERS' ? 'bg-white shadow text-black' : 'text-gray-400'}`}
-                    >
-                        Участники
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('INVENTORY')} 
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'INVENTORY' ? 'bg-white shadow text-black' : 'text-gray-400'}`}
-                    >
-                        <Backpack size={14} /> Рюкзак
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('SHOP')} 
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'SHOP' ? 'bg-white shadow text-black' : 'text-gray-400'}`}
-                    >
-                        <ShoppingBag size={14} /> Магазин
-                    </button>
-                </div>
+                 <h1 className="text-[24px] leading-tight font-bold">Семья</h1>
+                 <SegmentedControl
+                    value={activeTab}
+                    onChange={setActiveTab}
+                    options={[
+                        { value: 'MEMBERS', label: 'Участники' },
+                        { value: 'INVENTORY', label: 'Рюкзак', icon: Backpack },
+                        { value: 'SHOP', label: 'Магазин', icon: ShoppingBag }
+                    ]}
+                 />
             </div>
 
             {activeTab === 'MEMBERS' && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-3">
                         {data.members.map(user => (
                             <MemberCard 
                                 key={user.id} 
@@ -194,12 +183,12 @@ export const FamilyScreen = ({
                         ))}
                     </div>
 
-                    <div className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl p-6 text-white shadow-xl relative overflow-hidden">
+                    <div className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-[14px] p-4 text-white shadow-md relative overflow-hidden">
                         <div className="absolute top-0 right-0 -mr-10 -mt-10 w-40 h-40 bg-white/10 rounded-full blur-2xl" />
                         <div className="relative z-10">
                             <div className="flex items-center gap-2 mb-2">
                                 <Trophy className="text-yellow-300" size={24} />
-                                <h3 className="text-lg font-bold">Лидерборд</h3>
+                                <h3 className="text-[17px] font-bold">Лидерборд</h3>
                             </div>
                             <div className="space-y-3 mt-4">
                                 {[...data.members].sort((a,b) => b.xp - a.xp).map((u, idx) => (
@@ -226,8 +215,8 @@ export const FamilyScreen = ({
                     </div>
 
                     {myInventory.length === 0 ? (
-                        <div className="text-center py-10 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
-                            <Backpack className="mx-auto text-gray-300 mb-2" size={48} />
+                        <div className="text-center py-8 bg-gray-50 rounded-[14px] border border-dashed border-gray-200">
+                            <Backpack className="mx-auto text-gray-300 mb-2" size={42} />
                             <p className="text-gray-400 text-sm">Рюкзак пуст. Купите что-нибудь в магазине!</p>
                             <button onClick={() => setActiveTab('SHOP')} className="mt-4 text-blue-500 text-sm font-bold">Перейти в магазин</button>
                         </div>
@@ -266,10 +255,10 @@ export const FamilyScreen = ({
             {activeTab === 'SHOP' && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                      {/* Balance */}
-                     <div className="bg-black text-white p-4 rounded-2xl flex items-center justify-between shadow-lg">
+                     <div className="bg-black text-white p-4 rounded-[14px] flex items-center justify-between shadow-md">
                          <div>
                              <div className="text-gray-400 text-xs font-bold uppercase mb-1">Твой Баланс</div>
-                             <div className="text-2xl font-bold text-yellow-400 flex items-center gap-2">
+                             <div className="text-[24px] font-bold text-yellow-400 flex items-center gap-2">
                                  <Coins className="fill-current" />
                                  {data.currentUser.xp}
                              </div>
@@ -281,7 +270,8 @@ export const FamilyScreen = ({
 
                      {/* Rewards Grid */}
                      <div>
-                         <h3 className="font-bold text-lg mb-3">Награды</h3>
+                         <SectionHeader title="Награды" />
+                         <div className="h-3" />
                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                              {data.rewards.map(reward => (
                                  <RewardCard 
@@ -326,6 +316,6 @@ export const FamilyScreen = ({
                     )}
                 </div>
             </Modal>
-        </div>
+        </Screen>
     )
 }

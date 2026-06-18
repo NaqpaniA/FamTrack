@@ -1,20 +1,90 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# FamTrack
 
-# Run and deploy your AI Studio app
+Семейный трекер для Telegram Mini App: задачи, финансы, награды, подписки и список покупок.
 
-This contains everything you need to run your app locally.
+## Что внутри
 
-View your app in AI Studio: https://ai.studio/apps/drive/1cE9e-QpYuE8Mo4EIsFVuR5fVxnrAB1YN
+- React/Vite frontend.
+- TypeScript HTTP backend на Node.js.
+- SQLite-хранилище с доменными таблицами.
+- Telegram `initData` auth с allowlist семьи.
+- Docker/Compose для домашнего сервера.
 
-## Run Locally
+Supabase ADR в `docs/architecture` оставлен как исторический контекст. Production путь сейчас: свой backend на домашнем сервере.
 
-**Prerequisites:**  Node.js
+## Локальный запуск
 
+```bash
+npm install
+npm run build
+FAMTRACK_AUTH_MODE=dev \
+FAMTRACK_DB_PATH=/tmp/famtrack.sqlite \
+FAMTRACK_STATIC_DIR="$PWD/dist" \
+PORT=8080 \
+npm run server:start
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Проверка:
+
+```bash
+curl http://127.0.0.1:8080/api/health
+```
+
+Для разработки фронта можно запустить Vite отдельно:
+
+```bash
+npm run dev
+```
+
+Vite проксирует `/api` на `http://127.0.0.1:8080`.
+
+## Production env
+
+Секреты не коммитятся. На сервере создаётся `.env.production` рядом с `compose.yaml`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=123456:...
+FAMTRACK_ALLOWED_TELEGRAM_IDS=111111111,222222222
+FAMTRACK_ALLOWED_TELEGRAM_USERNAMES=
+FAMTRACK_PUBLIC_HOST=famtrack.example.com
+FAMTRACK_PUBLIC_PORT=
+FAMTRACK_PUBLIC_URL=
+FAMTRACK_SESSION_SECRET=generate-a-long-random-value
+FAMTRACK_INTERNAL_API_SECRET=generate-a-long-random-value
+FAMTRACK_AUTH_MODE=telegram
+FAMTRACK_OWNER_TELEGRAM_IDS=111111111
+FAMTRACK_AGENT_API_BASE=http://127.0.0.1:18080
+FAMTRACK_AGENT_TELEGRAM_PROXY=
+FAMTRACK_AGENT_CODEX_BIN=
+```
+
+`TELEGRAM_BOT_TOKEN` берётся у BotFather. `FAMTRACK_ALLOWED_TELEGRAM_IDS` — числовые Telegram user id членов семьи.
+
+## Docker
+
+```bash
+cp .env.example .env.production
+docker compose up -d --build
+curl http://127.0.0.1:18080/api/health
+```
+
+Compose публикует контейнер только на `127.0.0.1:18080`, чтобы Docker не открывал приложение наружу мимо firewall. Публичный HTTPS должен идти через infra reverse tunnel/proxy.
+
+## Telegram agent and MCP
+
+`agent/famtrack_agent.py` — long-polling Telegram agent for the home server. It uses the same bot token and allowlist as the Mini App, answers family commands, and keeps owner-only `/plan` and `/agent` flows behind `FAMTRACK_OWNER_TELEGRAM_IDS`.
+
+`mcp/famtrack_mcp.py` — stdio MCP bridge for Codex/tools. Reads and writes go through the FamTrack HTTP API, so Telegram identity and RBAC stay enforced by the backend.
+
+If Telegram API is unavailable from the home network, the agent can use `FAMTRACK_AGENT_TELEGRAM_PROXY=socks5h://127.0.0.1:11080`. The SSH tunnel that provides this proxy is managed by the infra repo.
+
+Production install/restart commands live in the infra repo. This repo only keeps app code and neutral configuration examples.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run test:server
+npm run build
+python3 -m py_compile agent/famtrack_agent.py mcp/famtrack_mcp.py
+```

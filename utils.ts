@@ -1,13 +1,15 @@
 
 import { AppData } from './types';
 import { INITIAL_DATA } from './data';
+import type { User } from './family.model';
 
 export const DB_KEY = 'FAMILY_OS_V5_DATA';
 
 // --- Telegram Web App Utils ---
 
 // Safe access to Telegram Web App object
-const tg = (window as any).Telegram?.WebApp;
+const getTelegramWebApp = () => (window as any).Telegram?.WebApp;
+const tg = getTelegramWebApp();
 
 export const TWA = {
   ready: () => tg?.ready(),
@@ -35,6 +37,10 @@ export const TWA = {
   initData: tg?.initData,
 };
 
+export const getTelegramInitData = () => {
+  return getTelegramWebApp()?.initData || '';
+};
+
 // --- Helper Utils ---
 
 export const generateId = (): string => {
@@ -49,7 +55,15 @@ export const formatMoney = (cents: number) => {
   return (cents / 100).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 });
 };
 
-export const isVisible = (item: any, userId: string) => {
+export const isOwner = (user?: Pick<User, 'role'> | null) => user?.role === 'OWNER';
+
+export const isVisible = (item: any, userOrId: string | User) => {
+    const user = typeof userOrId === 'string' ? undefined : userOrId;
+    const userId = typeof userOrId === 'string' ? userOrId : userOrId.id;
+
+    // Owner sees the whole family workspace.
+    if (isOwner(user)) return true;
+
     // 1. Creator always sees their own item
     if (item.createdById === userId) return true;
     

@@ -8,6 +8,7 @@ import { ShoppingItem, ShoppingCategoryType } from './shopping.model';
 import { AppEvent, EventType } from './events.model';
 import { TWA, generateId, formatMoney } from './utils';
 import { useFamilyData, useMutations } from './queries';
+import { INITIAL_DATA } from './data';
 
 export const useAppStore = () => {
   // React Query Data
@@ -109,16 +110,16 @@ export const useAppStore = () => {
   const switchUser = (userId: string) => {
       const user = data.members.find(m => m.id === userId);
       if (user) {
-          mutations.batchUpdate.mutate({ currentUser: user });
           TWA.haptic('medium');
-          addToast(`Вы вошли как ${user.name}`, 'INFO');
+          addToast(`Профиль определяется Telegram: ${user.name}`, 'INFO');
       }
   };
 
   const resetData = () => {
       if (confirm('Вы уверены? Все данные будут удалены.')) {
-          localStorage.clear();
-          window.location.reload();
+          mutations.batchUpdate.mutate(INITIAL_DATA, {
+              onSuccess: () => window.location.reload()
+          });
       }
   };
 

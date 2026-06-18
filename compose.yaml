@@ -1,0 +1,27 @@
+services:
+  famtrack:
+    build:
+      context: .
+    image: famtrack:local
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      FAMTRACK_AUTH_MODE: telegram
+      FAMTRACK_DB_PATH: /data/famtrack.sqlite
+      FAMTRACK_STATIC_DIR: /app/dist
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - famtrack-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  famtrack-data:

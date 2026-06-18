@@ -27,6 +27,11 @@ export interface AppData {
   events: AppEvent[];
 }
 
+export interface ApiEnvelope {
+  revision: number;
+  data: AppData;
+}
+
 export interface ToastMessage {
     id: string;
     message: string;

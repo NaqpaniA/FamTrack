@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Layout, CheckSquare, Wallet, Users, Loader2, ShoppingBag } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import './styles.css';
 
 import { Tab } from './types';
 import { Task, Epic } from './tasks.model';
@@ -17,7 +18,7 @@ import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
 import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
 import { ShoppingScreen } from './shopping.ui';
 import { SettingsModal } from './settings.ui';
-import { Modal, ToastContainer, StreakModal } from './ui-kit';
+import { BottomNav, Modal, ToastContainer, StreakModal } from './ui-kit';
 
 // --- Query Client Setup ---
 const queryClient = new QueryClient({
@@ -54,7 +55,7 @@ const App = () => {
       TWA.ready();
       TWA.expand();
       TWA.enableClosingConfirmation();
-      document.body.style.backgroundColor = TWA.backgroundColor;
+      document.body.style.backgroundColor = '#f5f6f8';
   }, []);
 
   // --- Daily Streak Check ---
@@ -116,11 +117,6 @@ const App = () => {
       setInitialEpicData(undefined);
   };
 
-  const handleSwitchUser = (id: string) => {
-      actions.app.switchUser(id);
-      setSettingsOpen(false);
-  };
-
   // --- Render ---
   
   if (isLoading) {
@@ -131,8 +127,16 @@ const App = () => {
       )
   }
 
+  const navItems = [
+      { id: 'DASHBOARD' as Tab, label: 'Главная', icon: Layout },
+      { id: 'TASKS' as Tab, label: 'Задачи', icon: CheckSquare },
+      { id: 'SHOP' as Tab, label: 'Список', icon: ShoppingBag },
+      { id: 'FINANCE' as Tab, label: 'Финансы', icon: Wallet },
+      { id: 'FAMILY' as Tab, label: 'Семья', icon: Users }
+  ];
+
   return (
-    <div className="min-h-screen text-gray-900 font-sans selection:bg-blue-100 pb-safe-area transition-colors duration-300" style={{ backgroundColor: TWA.backgroundColor }}>
+    <div className="min-h-[100svh] text-gray-950 font-sans selection:bg-blue-100 transition-colors duration-300 bg-[#f5f6f8]">
        <ToastContainer toasts={toasts} removeToast={removeToast} />
        
        {/* Daily Bonus Modal */}
@@ -145,32 +149,10 @@ const App = () => {
            />
        )}
 
-       {/* Tab Navigation */}
-       <div className="fixed bottom-0 inset-x-0 bg-white/90 backdrop-blur-md border-t border-gray-100 flex justify-around py-3 pb-6 z-50 safe-bottom shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
-          <button onClick={() => handleNavigate('DASHBOARD')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'DASHBOARD' ? 'text-black scale-105' : 'text-gray-400'}`}>
-              <Layout size={24} strokeWidth={activeTab === 'DASHBOARD' ? 2.5 : 2} />
-              <span className="text-[10px] font-bold">Главная</span>
-          </button>
-          <button onClick={() => handleNavigate('TASKS')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'TASKS' ? 'text-black scale-105' : 'text-gray-400'}`}>
-              <CheckSquare size={24} strokeWidth={activeTab === 'TASKS' ? 2.5 : 2} />
-              <span className="text-[10px] font-bold">Задачи</span>
-          </button>
-           <button onClick={() => handleNavigate('SHOP')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'SHOP' ? 'text-black scale-105' : 'text-gray-400'}`}>
-              <ShoppingBag size={24} strokeWidth={activeTab === 'SHOP' ? 2.5 : 2} />
-              <span className="text-[10px] font-bold">Список</span>
-          </button>
-          <button onClick={() => handleNavigate('FINANCE')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'FINANCE' ? 'text-black scale-105' : 'text-gray-400'}`}>
-              <Wallet size={24} strokeWidth={activeTab === 'FINANCE' ? 2.5 : 2} />
-              <span className="text-[10px] font-bold">Финансы</span>
-          </button>
-          <button onClick={() => handleNavigate('FAMILY')} className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'FAMILY' ? 'text-black scale-105' : 'text-gray-400'}`}>
-              <Users size={24} strokeWidth={activeTab === 'FAMILY' ? 2.5 : 2} />
-              <span className="text-[10px] font-bold">Семья</span>
-          </button>
-       </div>
+       <BottomNav activeTab={activeTab} items={navItems} onNavigate={handleNavigate} />
 
        {/* Main Content Area */}
-       <div className="max-w-md mx-auto min-h-screen sm:border-x border-gray-100 sm:shadow-2xl relative bg-gray-50/50">
+       <div className="min-h-[100svh] relative">
           {activeTab === 'DASHBOARD' && (
               <DashboardScreen 
                 data={data} 
@@ -233,7 +215,7 @@ const App = () => {
               key={editingTask ? editingTask.id : 'new-task'}
               task={editingTask} 
               members={data.members} 
-              epics={data.epics.filter(e => isVisible(e, data.currentUser.id))}
+              epics={data.epics.filter(e => isVisible(e, data.currentUser))}
               currentUser={data.currentUser}
               onSave={handleTaskSave} 
               onDelete={handleTaskDelete} 
@@ -244,8 +226,8 @@ const App = () => {
            <TransactionEditor 
               key={editingTransaction ? editingTransaction.id : 'new-tx'}
               onSave={handleTxSave} 
-              accounts={data.accounts.filter(a => isVisible(a, data.currentUser.id))}
-              goals={data.goals.filter(g => isVisible(g, data.currentUser.id))}
+              accounts={data.accounts.filter(a => isVisible(a, data.currentUser))}
+              goals={data.goals.filter(g => isVisible(g, data.currentUser))}
               transaction={editingTransaction}
            />
        </Modal>
@@ -255,7 +237,7 @@ const App = () => {
               key={editingAccount ? editingAccount.id : 'new-acc'}
               onSave={handleAccountSave} 
               members={data.members} 
-              epics={data.epics.filter(e => isVisible(e, data.currentUser.id))}
+              epics={data.epics.filter(e => isVisible(e, data.currentUser))}
               account={editingAccount}
            />
        </Modal>
@@ -269,17 +251,16 @@ const App = () => {
               key={initialEpicData ? 'with-data' : 'new-epic'}
               onSave={handleEpicSave} 
               members={data.members} 
-              goals={data.goals.filter(g => isVisible(g, data.currentUser.id))}
+              goals={data.goals.filter(g => isVisible(g, data.currentUser))}
               initialData={initialEpicData}
            />
        </Modal>
 
        <Modal isOpen={isSettingsOpen} onClose={() => setSettingsOpen(false)} title="Настройки">
-           <SettingsModal 
-              data={data}
-              onSwitchUser={handleSwitchUser}
-              onReset={actions.app.resetData}
-           />
+            <SettingsModal
+               data={data}
+               onReset={actions.app.resetData}
+            />
        </Modal>
     </div>
   );

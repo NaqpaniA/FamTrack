@@ -8,20 +8,116 @@ import {
   Calendar,
   Flame
 } from 'lucide-react';
-import { User, ToastMessage } from './types';
+import { Tab, User, ToastMessage } from './types';
+
+type IconComponent = React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+
+export const Screen = ({ children, className = '' }: { children?: React.ReactNode, className?: string }) => (
+  <main className={`app-screen max-w-2xl mx-auto space-y-5 ${className}`}>
+    {children}
+  </main>
+);
+
+export const Panel = ({ children, className = '', onClick }: { children?: React.ReactNode, className?: string, onClick?: () => void }) => (
+  <section onClick={onClick} className={`app-panel ${className}`}>
+    {children}
+  </section>
+);
+
+export const SectionHeader = ({ title, action, icon: Icon }: { title: string, action?: React.ReactNode, icon?: IconComponent }) => (
+  <div className="flex items-center justify-between gap-3">
+    <h2 className="text-[17px] leading-tight font-bold text-gray-950 flex items-center gap-2">
+      {Icon && <Icon size={18} />}
+      {title}
+    </h2>
+    {action}
+  </div>
+);
+
+export const SegmentedControl = <T extends string>({
+  value,
+  options,
+  onChange,
+  className = ''
+}: {
+  value: T,
+  options: Array<{ value: T, label?: string, icon?: IconComponent }>,
+  onChange: (value: T) => void,
+  className?: string
+}) => (
+  <div className={`inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200/70 ${className}`}>
+    {options.map(option => {
+      const Icon = option.icon;
+      const active = option.value === value;
+      return (
+        <button
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          className={`min-h-9 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${active ? 'bg-white text-gray-950 shadow-sm' : 'text-gray-500'}`}
+          aria-pressed={active}
+        >
+          {Icon && <Icon size={17} strokeWidth={active ? 2.5 : 2} />}
+          {option.label && <span>{option.label}</span>}
+        </button>
+      );
+    })}
+  </div>
+);
+
+export const FloatingActionButton = ({ onClick, icon: Icon, label }: { onClick: () => void, icon: IconComponent, label: string }) => (
+  <button
+    onClick={onClick}
+    aria-label={label}
+    title={label}
+    className="fixed right-4 z-40 w-12 h-12 rounded-2xl bg-black text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+    style={{ bottom: 'calc(var(--bottom-nav-height) + 14px + env(safe-area-inset-bottom))' }}
+  >
+    <Icon size={22} />
+  </button>
+);
+
+export const BottomNav = ({
+  activeTab,
+  items,
+  onNavigate
+}: {
+  activeTab: Tab,
+  items: Array<{ id: Tab, label: string, icon: IconComponent }>,
+  onNavigate: (tab: Tab) => void
+}) => (
+  <nav className="fixed bottom-0 inset-x-0 z-50 bg-white/95 backdrop-blur-md border-t border-gray-200/80 shadow-[0_-6px_24px_rgba(15,23,42,0.06)] safe-bottom">
+    <div className="h-16 max-w-2xl mx-auto grid grid-cols-5">
+      {items.map(item => {
+        const active = item.id === activeTab;
+        const Icon = item.icon;
+        return (
+          <button
+            key={item.id}
+            onClick={() => onNavigate(item.id)}
+            className={`flex flex-col items-center justify-center gap-0.5 transition-colors ${active ? 'text-black' : 'text-gray-400'}`}
+            aria-current={active ? 'page' : undefined}
+          >
+            <Icon size={23} strokeWidth={active ? 2.6 : 2} />
+            <span className="text-[10px] leading-none font-bold">{item.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  </nav>
+);
 
 export const Card = ({ children, className = '', onClick }: { children?: React.ReactNode, className?: string, onClick?: () => void }) => (
-  <div onClick={onClick} className={`bg-white rounded-2xl p-4 shadow-sm border border-gray-100 ${className}`}>
+  <div onClick={onClick} className={`app-panel p-4 ${className}`}>
     {children}
   </div>
 );
 
 export const Avatar = ({ user, size = 'sm', selected = false, onClick }: { key?: React.Key, user?: User, size?: 'sm' | 'md' | 'lg' | 'xl', selected?: boolean, onClick?: () => void }) => {
-  const sizes = { sm: 'w-8 h-8 text-sm', md: 'w-10 h-10 text-lg', lg: 'w-14 h-14 text-2xl', xl: 'w-20 h-20 text-4xl' };
+  const sizes = { sm: 'w-7 h-7 text-xs', md: 'w-9 h-9 text-base', lg: 'w-12 h-12 text-xl', xl: 'w-16 h-16 text-3xl' };
   return (
     <div 
       onClick={onClick}
-      className={`${sizes[size]} rounded-full flex items-center justify-center bg-gray-100 border-2 transition-all cursor-pointer ${selected ? 'border-blue-500 ring-2 ring-blue-100 scale-110' : 'border-white'}`}
+      className={`${sizes[size]} rounded-full flex items-center justify-center bg-gray-100 border transition-all cursor-pointer ${selected ? 'border-blue-500 ring-2 ring-blue-100 scale-105' : 'border-white'}`}
     >
       {user ? user.avatar : '?'}
     </div>
@@ -76,7 +172,7 @@ export const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean, o
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
-      <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-4 max-h-[90vh] overflow-y-auto animate-in slide-in-from-bottom-10 duration-300 shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-4 max-h-[88svh] overflow-y-auto animate-in slide-in-from-bottom-10 duration-300 shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold">{title}</h3>
           <button onClick={onClose} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200">

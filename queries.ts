@@ -1,10 +1,9 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import { AppData, User } from './types';
+import { AppData } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
-import { Reward, RewardLog } from './family.model';
 import { INITIAL_DATA } from './data';
 import { TWA } from './utils';
 
@@ -72,6 +71,10 @@ export const useMutations = () => {
                 setData({ ...prevData, tasks: prevData.tasks.filter(t => t.id !== id) });
                 return { prevData };
             },
+            onError: (err, id, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
             onSettled: () => invalidate()
         }),
 
@@ -101,6 +104,10 @@ export const useMutations = () => {
                 setData({ ...prevData, budgets });
                 return { prevData };
             },
+            onError: (err, budgets, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
             onSettled: () => invalidate()
         }),
         
@@ -118,6 +125,10 @@ export const useMutations = () => {
                 const prevData = getData();
                 setData({ ...prevData, ...updates });
                 return { prevData };
+            },
+            onError: (err, updates, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
             },
             onSettled: () => invalidate()
         })

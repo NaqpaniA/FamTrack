@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Task, Epic, SubTask, Priority, TaskStatus, PRIORITIES, isOverdue, isToday } from './tasks.model';
 import { User, AppData } from './types'; // AppData needed for Screen props
-import { Avatar, VisibilitySelector } from './ui-kit';
+import { Avatar, FloatingActionButton, Panel, Screen, SegmentedControl, VisibilitySelector } from './ui-kit';
 import { formatMoney, isVisible } from './utils'; // Generic utils
 import { FinancialGoal } from './finance.model';
 
@@ -41,7 +41,7 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
   };
 
   return (
-    <div className={`flex items-start gap-3 py-3 border-b border-gray-50 last:border-0 animate-in fade-in duration-300 ${task.status === 'DONE' ? 'opacity-60' : ''}`}>
+    <div className={`flex items-start gap-3 py-2.5 border-b border-gray-50 last:border-0 animate-in fade-in duration-300 ${task.status === 'DONE' ? 'opacity-60' : ''}`}>
       <button 
         onClick={handleCheck}
         className={`mt-1 transition-colors active:scale-90 transform ${task.status === 'DONE' ? 'text-green-500' : 'text-gray-300 hover:text-gray-400'}`}
@@ -60,7 +60,7 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
            {task.isRecurring && <Clock size={10} className="text-blue-400" />}
         </div>
 
-        <div className={`font-medium text-[15px] transition-all ${task.status === 'DONE' ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+        <div className={`font-medium text-[14px] transition-all ${task.status === 'DONE' ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
           {task.title}
         </div>
         
@@ -104,7 +104,7 @@ export const KanbanCard: React.FC<{ key?: React.Key, task: Task, assignee?: User
     const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
 
     return (
-        <div onClick={onClick} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 mb-2 active:scale-95 transition-transform">
+        <div onClick={onClick} className="bg-white p-3 rounded-[12px] shadow-sm border border-gray-100 mb-2 active:scale-95 transition-transform">
             <div className="flex justify-between items-start mb-2">
                 <div className="flex items-center gap-1">
                     {epic ? (
@@ -441,7 +441,7 @@ export const TasksScreen = ({
 }) => {
     const [view, setView] = useState<'LIST' | 'KANBAN'>('LIST');
     
-    let tasks = data.tasks.filter(t => isVisible(t, data.currentUser.id));
+    let tasks = data.tasks.filter(t => isVisible(t, data.currentUser));
     if (activeFilterEpicId) {
         tasks = tasks.filter(t => t.epicId === activeFilterEpicId);
     }
@@ -449,32 +449,32 @@ export const TasksScreen = ({
     const activeEpic = activeFilterEpicId ? data.epics.find(e => e.id === activeFilterEpicId) : null;
 
     return (
-        <div className="p-4 pb-24 min-h-screen flex flex-col">
-            <div className="flex items-center justify-between mb-6">
+        <Screen className="flex flex-col">
+            <div className="flex items-center justify-between gap-3">
                 <div>
-                    <h1 className="text-2xl font-bold">{activeEpic ? activeEpic.title : 'Задачи'}</h1>
-                    <p className="text-gray-500 text-sm">{tasks.length} всего</p>
+                    <h1 className="text-[24px] leading-tight font-bold">{activeEpic ? activeEpic.title : 'Задачи'}</h1>
+                    <p className="text-gray-500 text-[13px]">{tasks.length} всего</p>
                 </div>
-                <div className="flex bg-gray-100 p-1 rounded-xl">
-                    <button onClick={() => setView('LIST')} className={`p-2 rounded-lg transition-all ${view === 'LIST' ? 'bg-white shadow text-black' : 'text-gray-400'}`}>
-                        <ListIcon size={20} />
-                    </button>
-                    <button onClick={() => setView('KANBAN')} className={`p-2 rounded-lg transition-all ${view === 'KANBAN' ? 'bg-white shadow text-black' : 'text-gray-400'}`}>
-                        <Kanban size={20} />
-                    </button>
-                </div>
+                <SegmentedControl
+                    value={view}
+                    onChange={setView}
+                    options={[
+                        { value: 'LIST', icon: ListIcon },
+                        { value: 'KANBAN', icon: Kanban }
+                    ]}
+                />
             </div>
 
             <div className="flex-1">
                 {view === 'LIST' ? (
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <Panel className="overflow-hidden mt-4">
                         {tasks.length === 0 ? (
-                            <div className="p-10 text-center text-gray-400">
+                            <div className="p-8 text-center text-gray-400">
                                 <p>Нет задач</p>
                             </div>
                         ) : (
                             tasks.sort((a,b) => (b.dueDate ? 1 : 0) - (a.dueDate ? 1 : 0)).map(task => (
-                                <div key={task.id} className="px-4">
+                                <div key={task.id} className="px-3">
                                     <TaskItem 
                                         task={task}
                                         assignee={data.members.find(m => m.id === task.assigneeId)}
@@ -485,12 +485,12 @@ export const TasksScreen = ({
                                 </div>
                             ))
                         )}
-                    </div>
+                    </Panel>
                 ) : (
-                    <div className="flex gap-4 overflow-x-auto pb-4 h-full no-scrollbar">
+                    <div className="flex gap-3 overflow-x-auto pb-4 h-full no-scrollbar snap-x-app mt-4 -mx-1 px-1">
                         {(['TODO', 'IN_PROGRESS', 'DONE'] as TaskStatus[]).map(status => (
-                            <div key={status} className="min-w-[280px] flex-1 bg-gray-50 rounded-2xl p-3">
-                                <div className="flex items-center gap-2 mb-3 text-sm font-bold text-gray-500 uppercase tracking-wider">
+                            <div key={status} className="min-w-[calc(100vw-28px)] max-w-[calc(100vw-28px)] sm:min-w-[280px] sm:max-w-[320px] flex-1 bg-gray-50 rounded-[14px] border border-gray-100 p-3 snap-start">
+                                <div className="flex items-center gap-2 mb-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
                                     <div className={`w-2 h-2 rounded-full ${status === 'TODO' ? 'bg-gray-400' : status === 'IN_PROGRESS' ? 'bg-blue-500' : 'bg-green-500'}`} />
                                     {status === 'TODO' ? 'Надо сделать' : status === 'IN_PROGRESS' ? 'В процессе' : 'Готово'}
                                 </div>
@@ -511,12 +511,7 @@ export const TasksScreen = ({
                 )}
             </div>
 
-            <button 
-                onClick={onAddTask}
-                className="fixed bottom-24 right-4 w-14 h-14 bg-black text-white rounded-full shadow-xl flex items-center justify-center active:scale-90 transition-transform z-40"
-            >
-                <Plus size={24} />
-            </button>
-        </div>
+            <FloatingActionButton onClick={onAddTask} icon={Plus} label="Добавить задачу" />
+        </Screen>
     )
 }

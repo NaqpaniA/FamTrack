@@ -23,8 +23,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type check
-        run: npm run typecheck
+      - name: Check TypeScript and backend
+        run: npm run check
 
-      - name: Build
-        run: npm run build
+      - name: Check Python agent tools
+        run: python3 -m py_compile agent/famtrack_agent.py mcp/famtrack_mcp.py

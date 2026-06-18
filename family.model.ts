@@ -10,7 +10,10 @@ export interface User {
   avatar: string; // Emoji
   xp: number;
   level: number;
+  telegramId?: number;
   telegramUsername?: string;
+  telegramFirstName?: string;
+  telegramLastName?: string;
   // Streak System
   streak: number;
   lastLoginDate?: string; // ISO Date YYYY-MM-DD

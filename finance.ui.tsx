@@ -29,7 +29,7 @@ import {
     SubscriptionFrequency
 } from './finance.model';
 import { formatMoney, isVisible } from './utils';
-import { VisibilitySelector, Modal, Avatar } from './ui-kit';
+import { FloatingActionButton, Modal, Panel, Screen, VisibilitySelector } from './ui-kit';
 
 // --- Components ---
 
@@ -74,7 +74,7 @@ export const GoalCard = ({ goal, onClick }: { key?: React.Key, goal: SavingsGoal
     return (
         <div 
             onClick={onClick}
-            className="min-w-[200px] bg-white rounded-2xl p-4 shadow-sm border border-gray-100 relative overflow-hidden cursor-pointer active:scale-95 transition-transform"
+            className="min-w-[180px] bg-white rounded-[14px] p-3 shadow-sm border border-gray-100 relative overflow-hidden cursor-pointer active:scale-95 transition-transform"
         >
             <div className="flex justify-between items-start mb-3">
                 <div className="w-10 h-10 bg-gray-50 rounded-full flex items-center justify-center text-xl">
@@ -122,7 +122,7 @@ export const SubscriptionCard = ({ sub, onPay, onEdit }: { key?: React.Key, sub:
     const isDueSoon = diffDays >= 0 && diffDays <= 3;
 
     return (
-        <div onClick={onEdit} className={`bg-white p-3 rounded-2xl border shadow-sm flex items-center justify-between relative overflow-hidden cursor-pointer active:scale-[0.98] transition-transform ${isOverdue ? 'border-red-200 ring-1 ring-red-50' : 'border-gray-100'}`}>
+        <div onClick={onEdit} className={`bg-white p-3 rounded-[14px] border shadow-sm flex items-center justify-between relative overflow-hidden cursor-pointer active:scale-[0.98] transition-transform ${isOverdue ? 'border-red-200 ring-1 ring-red-50' : 'border-gray-100'}`}>
              {isOverdue && <div className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full -mr-1 -mt-1 animate-pulse" />}
              
              <div className="flex items-center gap-3">
@@ -694,7 +694,7 @@ export const FinanceScreen = ({
     onDeleteSubscription?: (id: string) => void,
     onPaySubscription?: (s: Subscription) => void
 }) => {
-    const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser.id));
+    const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser));
     const visibleTransactions = data.transactions
         .filter(t => visibleAccounts.some(a => a.id === t.accountId))
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -724,12 +724,12 @@ export const FinanceScreen = ({
     const [activeSub, setActiveSub] = useState<Subscription | null>(null);
 
     return (
-        <div className="p-4 pb-24 space-y-8 animate-in fade-in duration-300">
+        <Screen className="space-y-5 animate-in fade-in duration-300">
             
             {/* Subscriptions / Fixed Costs */}
             <div>
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-bold flex items-center gap-2"><Repeat size={20} className="text-red-500" /> Платежи</h2>
+                    <h2 className="text-[17px] font-bold flex items-center gap-2"><Repeat size={18} className="text-red-500" /> Платежи</h2>
                     <div className="flex items-center gap-2">
                         <div className="text-xs font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
                             Burn: {formatMoney(fixedMonthlyCost).replace(',00 ₽', '')}/мес
@@ -755,7 +755,7 @@ export const FinanceScreen = ({
                                 />
                             ))
                     ) : (
-                        <div className="bg-gray-50 border border-dashed border-gray-200 p-4 rounded-xl text-center text-sm text-gray-400">
+                        <div className="bg-gray-50 border border-dashed border-gray-200 p-4 rounded-[14px] text-center text-sm text-gray-400">
                             Добавьте подписки или квартплату
                         </div>
                     )}
@@ -765,7 +765,7 @@ export const FinanceScreen = ({
             {/* Dream Jars */}
             <div>
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-bold flex items-center gap-2"><Target size={20} className="text-purple-500" /> Вишлист</h2>
+                    <h2 className="text-[17px] font-bold flex items-center gap-2"><Target size={18} className="text-purple-500" /> Вишлист</h2>
                     <button 
                         onClick={() => { setActiveGoal(null); setGoalModalOpen(true); }}
                         className="text-blue-600 text-sm bg-blue-50 px-2 py-1 rounded-lg"
@@ -773,9 +773,9 @@ export const FinanceScreen = ({
                         <Plus size={16} />
                     </button>
                 </div>
-                <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
+                <div className="flex gap-3 overflow-x-auto pb-3 no-scrollbar snap-x-app">
                     {data.savingsGoals.length === 0 ? (
-                        <div className="w-full bg-gray-50 border border-dashed border-gray-200 rounded-2xl p-6 text-center">
+                        <div className="w-full bg-gray-50 border border-dashed border-gray-200 rounded-[14px] p-5 text-center">
                             <p className="text-gray-400 text-sm mb-2">Нет целей</p>
                             <button onClick={() => setGoalModalOpen(true)} className="text-sm font-bold text-blue-500">Создать копилку</button>
                         </div>
@@ -797,7 +797,7 @@ export const FinanceScreen = ({
             {/* Accounts */}
             <div>
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-bold">Счета</h2>
+                    <h2 className="text-[17px] font-bold">Счета</h2>
                     <button onClick={onAddAccount} className="text-blue-600 text-sm bg-blue-50 px-2 py-1 rounded-lg">
                         <Plus size={16} />
                     </button>
@@ -810,7 +810,7 @@ export const FinanceScreen = ({
                              <div 
                                 key={acc.id} 
                                 onClick={() => onEditAccount(acc)}
-                                className="bg-gray-900 text-white p-5 rounded-2xl shadow-lg relative overflow-hidden active:scale-[0.98] transition-transform cursor-pointer"
+                                className="bg-gray-900 text-white p-4 rounded-[14px] shadow-md relative overflow-hidden active:scale-[0.98] transition-transform cursor-pointer"
                              >
                                  <div className="absolute top-0 right-0 p-24 bg-white/5 rounded-full -mr-10 -mt-10 pointer-events-none" />
                                  <div className="relative z-10">
@@ -823,7 +823,7 @@ export const FinanceScreen = ({
                                             {acc.type === 'CARD' ? <CreditCard size={20} /> : acc.type === 'CASH' ? <Wallet size={20} /> : <PiggyBank size={20} />}
                                          </div>
                                      </div>
-                                     <div className="text-2xl font-mono tracking-tight">{formatMoney(acc.balance)}</div>
+                                     <div className="text-xl font-mono tracking-tight">{formatMoney(acc.balance)}</div>
                                      
                                      {goal && (
                                          <div className="mt-4 pt-4 border-t border-white/10">
@@ -854,12 +854,12 @@ export const FinanceScreen = ({
             {/* Budgets */}
             <div>
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-bold flex items-center gap-2"><PieChart size={18} /> Бюджет (мес)</h2>
+                    <h2 className="text-[17px] font-bold flex items-center gap-2"><PieChart size={18} /> Бюджет (мес)</h2>
                     <button onClick={onManageBudgets} className="text-gray-400 hover:text-gray-600">
                         <Settings size={18} />
                     </button>
                 </div>
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-4">
+                <Panel className="p-4 space-y-4">
                     {budgetStats.length === 0 ? (
                          <div className="text-center text-gray-400 text-sm py-2">Бюджеты не настроены</div>
                     ) : (
@@ -888,15 +888,15 @@ export const FinanceScreen = ({
                             )
                         })
                     )}
-                </div>
+                </Panel>
             </div>
 
             {/* Transactions */}
             <div>
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-lg font-bold">История</h2>
+                    <h2 className="text-[17px] font-bold">История</h2>
                 </div>
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <Panel className="overflow-hidden">
                     {visibleTransactions.length === 0 ? (
                         <div className="p-8 text-center text-gray-400 text-sm">Нет операций</div>
                     ) : (
@@ -912,15 +912,10 @@ export const FinanceScreen = ({
                     <div className="p-3 text-center border-t border-gray-50">
                         <button className="text-xs text-gray-400 font-medium uppercase tracking-wide">Показать все</button>
                     </div>
-                </div>
+                </Panel>
             </div>
 
-            <button 
-                onClick={onAddTransaction}
-                className="fixed bottom-24 right-4 w-14 h-14 bg-black text-white rounded-full shadow-xl flex items-center justify-center active:scale-90 transition-transform z-40"
-            >
-                <Plus size={24} />
-            </button>
+            <FloatingActionButton onClick={onAddTransaction} icon={Plus} label="Добавить операцию" />
 
             {/* Modals */}
             <Modal isOpen={isGoalModalOpen} onClose={() => setGoalModalOpen(false)} title={activeGoal ? 'Редактировать цель' : 'Новая цель'}>
@@ -958,6 +953,6 @@ export const FinanceScreen = ({
                 />
             </Modal>
 
-        </div>
+        </Screen>
     );
 };
