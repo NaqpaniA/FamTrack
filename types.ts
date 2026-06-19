@@ -11,6 +11,7 @@ export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY' | 'SHOP';
 export interface AppData {
   currentUser: User;
   members: User[];
+  archivedMembers?: User[];
   epics: Epic[];
   tasks: Task[];
   accounts: Account[];

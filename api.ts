@@ -23,6 +23,9 @@ export interface ApiInterface {
     saveGoal(goal: FinancialGoal): Promise<FinancialGoal>;
     saveBudgets(budgets: BudgetPlan[]): Promise<BudgetPlan[]>;
     updateUser(user: User): Promise<User>;
+    saveUser(user: User): Promise<User>;
+    archiveUser(id: string): Promise<void>;
+    restoreUser(id: string): Promise<void>;
     saveRewardLog(log: RewardLog): Promise<RewardLog>;
     saveInventoryItem(item: InventoryItem): Promise<InventoryItem>;
     saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal>;
@@ -58,7 +61,29 @@ class LocalAdapter implements ApiInterface {
         if (!data.shoppingList) data.shoppingList = [];
         if (!data.subscriptions) data.subscriptions = [];
         if (!data.events) data.events = [];
-        return data;
+        const members = this.allMembers(data).map(member => ({
+            ...member,
+            isActive: member.id === 'u4' && member.name === 'Дочь' && member.role === 'CHILD' && !member.telegramId
+                ? false
+                : member.isActive ?? true
+        }));
+        return this.splitMembers(data, members);
+    }
+
+    private allMembers(data: AppData): User[] {
+        const archived = data.archivedMembers || [];
+        return [
+            ...data.members,
+            ...archived.filter(user => !data.members.some(member => member.id === user.id))
+        ];
+    }
+
+    private splitMembers(data: AppData, members: User[]): AppData {
+        return {
+            ...data,
+            members: members.filter(member => member.isActive !== false),
+            archivedMembers: members.filter(member => member.isActive === false)
+        };
     }
 
     private saveData(data: AppData) {
@@ -142,12 +167,38 @@ class LocalAdapter implements ApiInterface {
     }
 
     async updateUser(user: User): Promise<User> {
+        return this.saveUser(user);
+    }
+
+    async saveUser(user: User): Promise<User> {
         return this.queue.enqueue(async () => {
             const data = this.getData();
-            data.members = data.members.map(member => member.id === user.id ? user : member);
-            if (data.currentUser.id === user.id) data.currentUser = user;
-            this.saveData(data);
+            const members = this.allMembers(data);
+            const nextUser = { ...user, isActive: user.isActive !== false };
+            const idx = members.findIndex(member => member.id === nextUser.id);
+            const nextMembers = [...members];
+            if (idx >= 0) nextMembers[idx] = nextUser;
+            else nextMembers.push(nextUser);
+            const nextData = this.splitMembers(data, nextMembers);
+            if (nextData.currentUser.id === nextUser.id) nextData.currentUser = nextUser;
+            this.saveData(nextData);
             return user;
+        });
+    }
+
+    async archiveUser(id: string): Promise<void> {
+        return this.queue.enqueue(async () => {
+            const data = this.getData();
+            const members = this.allMembers(data).map(member => member.id === id ? { ...member, isActive: false } : member);
+            this.saveData(this.splitMembers(data, members));
+        });
+    }
+
+    async restoreUser(id: string): Promise<void> {
+        return this.queue.enqueue(async () => {
+            const data = this.getData();
+            const members = this.allMembers(data).map(member => member.id === id ? { ...member, isActive: true } : member);
+            this.saveData(this.splitMembers(data, members));
         });
     }
 
@@ -204,7 +255,18 @@ class LocalAdapter implements ApiInterface {
 
     async batchUpdate(updates: Partial<AppData>): Promise<void> {
         return this.queue.enqueue(async () => {
-            this.saveData({ ...this.getData(), ...updates });
+            const current = this.getData();
+            const next = { ...current, ...updates };
+            if (updates.members) {
+                const incomingById = new Map(updates.members.map(member => [member.id, member]));
+                const merged = this.allMembers(current).map(member => incomingById.get(member.id) || member);
+                const existingIds = new Set(merged.map(member => member.id));
+                for (const member of updates.members) {
+                    if (!existingIds.has(member.id)) merged.push(member);
+                }
+                return this.saveData(this.splitMembers(next, merged));
+            }
+            this.saveData(next);
         });
     }
 }
@@ -304,6 +366,18 @@ class ServerAdapter implements ApiInterface {
 
     async updateUser(user: User): Promise<User> {
         return this.write('/api/users/update', { user }, user);
+    }
+
+    async saveUser(user: User): Promise<User> {
+        return this.write('/api/users/save', { user }, user);
+    }
+
+    async archiveUser(id: string): Promise<void> {
+        await this.requestEnvelope('/api/users/archive', { id });
+    }
+
+    async restoreUser(id: string): Promise<void> {
+        await this.requestEnvelope('/api/users/restore', { id });
     }
 
     async saveRewardLog(log: RewardLog): Promise<RewardLog> {

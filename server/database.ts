@@ -42,6 +42,7 @@ const TABLES = [
 ];
 
 const boolToInt = (value?: boolean) => value ? 1 : 0;
+const activeToInt = (value?: boolean) => value === false ? 0 : 1;
 const intToBool = (value: unknown) => Number(value) === 1;
 const nullable = <T>(value: T | undefined | null) => value ?? null;
 const json = (value: unknown) => JSON.stringify(value ?? null);
@@ -106,9 +107,11 @@ export class FamTrackDatabase {
 
     getAppData(currentUserOverride?: User): AppData {
         const members = this.selectRows('SELECT * FROM users ORDER BY rowid').map(rowToUser);
+        const activeMembers = members.filter(user => user.isActive !== false);
         const currentUserId = this.getState('current_user_id');
         const currentUser = currentUserOverride
-            || members.find(user => user.id === currentUserId)
+            || activeMembers.find(user => user.id === currentUserId)
+            || activeMembers[0]
             || members[0]
             || cloneInitialData().currentUser;
 
@@ -181,6 +184,7 @@ export class FamTrackDatabase {
                 avatar TEXT NOT NULL,
                 xp INTEGER NOT NULL,
                 level INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 telegram_id INTEGER,
                 telegram_username TEXT,
                 streak INTEGER NOT NULL,
@@ -321,6 +325,8 @@ export class FamTrackDatabase {
                 timestamp INTEGER NOT NULL
             );
         `);
+        this.addColumnIfMissing('users', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+        this.db.run("UPDATE users SET is_active = 0 WHERE id = 'u4' AND name = 'Дочь' AND role = 'CHILD' AND telegram_id IS NULL");
     }
 
     private isEmpty() {
@@ -332,7 +338,11 @@ export class FamTrackDatabase {
             this.db.run(`DELETE FROM ${table}`);
         }
 
-        this.insertUsers(data.members || []);
+        const members = [
+            ...(data.members || []),
+            ...((data.archivedMembers || []).filter(archived => !(data.members || []).some(member => member.id === archived.id)))
+        ];
+        this.insertUsers(members);
         this.insertEpics(data.epics || []);
         this.insertTasks(data.tasks || []);
         this.insertAccounts(data.accounts || []);
@@ -352,7 +362,19 @@ export class FamTrackDatabase {
 
     private insertUsers(users: User[]) {
         const stmt = this.db.prepare(`
-            INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO users (
+                id,
+                name,
+                role,
+                avatar,
+                xp,
+                level,
+                is_active,
+                telegram_id,
+                telegram_username,
+                streak,
+                last_login_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         try {
             for (const user of users) {
@@ -363,6 +385,7 @@ export class FamTrackDatabase {
                     user.avatar,
                     user.xp,
                     user.level,
+                    activeToInt(user.isActive),
                     nullable(user.telegramId),
                     nullable(user.telegramUsername),
                     user.streak || 0,
@@ -687,6 +710,13 @@ export class FamTrackDatabase {
     private persist() {
         fs.writeFileSync(this.dbPath, Buffer.from(this.db.export()));
     }
+
+    private addColumnIfMissing(table: string, column: string, definition: string) {
+        const rows = this.selectRows(`PRAGMA table_info(${table})`);
+        if (!rows.some(row => row.name === column)) {
+            this.db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        }
+    }
 }
 
 const rowToUser = (row: Row): User => ({
@@ -696,6 +726,7 @@ const rowToUser = (row: Row): User => ({
     avatar: String(row.avatar),
     xp: toNumber(row.xp),
     level: toNumber(row.level, 1),
+    isActive: row.is_active == null ? true : intToBool(row.is_active),
     telegramId: row.telegram_id == null ? undefined : toNumber(row.telegram_id),
     telegramUsername: row.telegram_username == null ? undefined : String(row.telegram_username),
     streak: toNumber(row.streak),

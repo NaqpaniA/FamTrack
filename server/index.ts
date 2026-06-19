@@ -1,12 +1,13 @@
 import http, { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { FamTrackDatabase, RevisionConflictError } from './database.js';
 import { AuthError, getAuthConfig, validateRequestAuth, type AuthContext } from './auth.js';
 import { ForbiddenError, assertCanWrite, filterForActor, sanitizeBatchUpdates } from './rbac.js';
 import type { AppData } from '../types.js';
-import type { User } from '../family.model.js';
+import type { Role, User } from '../family.model.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 8080);
@@ -115,15 +116,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
                 budgets: Array.isArray(body.budgets) ? body.budgets as AppData['budgets'] : data.budgets
             }));
         case '/api/users/update':
+        case '/api/users/save':
             assertCanWrite(actor, pathname, body, db.getAppData(actor));
-            return sendMutation(res, revision, actor, data => {
-                const user = body.user as AppData['members'][number];
-                return {
-                    ...data,
-                    members: data.members.map(member => member.id === user.id ? user : member),
-                    currentUser: data.currentUser.id === user.id ? user : data.currentUser
-                };
-            });
+            return sendMutation(res, revision, actor, data => saveFamilyUser(data, body.user, actor));
+        case '/api/users/archive':
+            assertCanWrite(actor, pathname, body, db.getAppData(actor));
+            return sendMutation(res, revision, actor, data => setFamilyUserActive(data, body.userId || body.id, false, actor));
+        case '/api/users/restore':
+            assertCanWrite(actor, pathname, body, db.getAppData(actor));
+            return sendMutation(res, revision, actor, data => setFamilyUserActive(data, body.userId || body.id, true, actor));
         case '/api/reward-logs/save':
             assertCanWrite(actor, pathname, body, db.getAppData(actor));
             return sendMutation(res, revision, actor, data => ({
@@ -146,10 +147,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
             assertCanWrite(actor, pathname, body, db.getAppData(actor));
             return sendMutation(res, revision, actor, data => upsertById(data, 'subscriptions', body.subscription));
         case '/api/batch':
-            return sendMutation(res, revision, actor, data => ({
-                ...data,
-                ...sanitizeBatchUpdates(actor, isObject(body.updates) ? body.updates as Partial<AppData> : {}, data)
-            }));
+            return sendMutation(res, revision, actor, data => applyScopedUpdates(
+                data,
+                sanitizeBatchUpdates(actor, isObject(body.updates) ? body.updates as Partial<AppData> : {}, data)
+            ));
         default:
             sendJson(res, 404, { error: 'API route not found' });
     }
@@ -177,6 +178,171 @@ function upsertById<K extends keyof AppData>(
     else if (prepend) next.unshift(value);
     else next.push(value);
     return { ...data, [key]: next };
+}
+
+function applyScopedUpdates(data: AppData, updates: Partial<AppData>): AppData {
+    const next = {
+        ...data,
+        ...updates
+    };
+    if (updates.members) {
+        next.members = mergeMembersPreservingArchive(data.members, updates.members);
+    }
+    delete next.archivedMembers;
+    return next;
+}
+
+function mergeMembersPreservingArchive(previous: User[], incoming: User[]) {
+    const incomingById = new Map(incoming.map(member => [member.id, member]));
+    const merged = previous.map(member => {
+        const next = incomingById.get(member.id);
+        if (!next) return member;
+        return {
+            ...next,
+            isActive: typeof next.isActive === 'boolean' ? next.isActive : member.isActive !== false
+        };
+    });
+    const previousIds = new Set(previous.map(member => member.id));
+    for (const member of incoming) {
+        if (!previousIds.has(member.id)) {
+            merged.push({ ...member, isActive: member.isActive !== false });
+        }
+    }
+    return merged;
+}
+
+function saveFamilyUser(data: AppData, rawUser: unknown, actor: User): AppData {
+    const previous = isObject(rawUser) && typeof rawUser.id === 'string'
+        ? data.members.find(member => member.id === rawUser.id)
+        : undefined;
+    const user = normalizeFamilyUser(rawUser, previous);
+    if (user.id === actor.id && user.isActive === false) {
+        throw badRequest('Owner cannot archive the current actor through save');
+    }
+
+    const exists = data.members.some(member => member.id === user.id);
+    const members = exists
+        ? data.members.map(member => member.id === user.id ? user : member)
+        : [...data.members, user];
+    validateFamilyMembers(members);
+
+    return {
+        ...data,
+        members,
+        currentUser: data.currentUser.id === user.id ? user : data.currentUser
+    };
+}
+
+function setFamilyUserActive(data: AppData, rawId: unknown, isActive: boolean, actor: User): AppData {
+    if (typeof rawId !== 'string' || rawId.trim().length === 0) {
+        throw badRequest('Family member id is required');
+    }
+    const id = rawId.trim();
+    if (!isActive && id === actor.id) {
+        throw badRequest('Owner cannot archive the current actor');
+    }
+    const previous = data.members.find(member => member.id === id);
+    if (!previous) {
+        throw badRequest('Family member not found');
+    }
+    const members = data.members.map(member => member.id === id ? { ...member, isActive } : member);
+    validateFamilyMembers(members);
+    return {
+        ...data,
+        members
+    };
+}
+
+function normalizeFamilyUser(rawUser: unknown, previous?: User): User {
+    if (!isObject(rawUser)) {
+        throw badRequest('Family member payload is required');
+    }
+    const role = normalizeRole(rawUser.role, previous?.role || 'CHILD');
+    const fallbackName = previous?.name || 'Family member';
+    const fallbackAvatar = previous?.avatar || (role === 'CHILD' ? '👦🏻' : '🙂');
+    const telegramId = Object.prototype.hasOwnProperty.call(rawUser, 'telegramId')
+        ? normalizeTelegramId(rawUser.telegramId)
+        : previous?.telegramId;
+    const telegramUsername = Object.prototype.hasOwnProperty.call(rawUser, 'telegramUsername')
+        ? normalizeTelegramUsername(rawUser.telegramUsername)
+        : previous?.telegramUsername;
+
+    return {
+        id: normalizeString(rawUser.id, previous?.id || `u-${randomUUID()}`, 80),
+        name: normalizeString(rawUser.name, fallbackName, 80),
+        role,
+        avatar: normalizeString(rawUser.avatar, fallbackAvatar, 12),
+        xp: normalizeInteger(rawUser.xp, previous?.xp || 0),
+        level: Math.max(1, normalizeInteger(rawUser.level, previous?.level || 1)),
+        isActive: typeof rawUser.isActive === 'boolean' ? rawUser.isActive : previous?.isActive !== false,
+        telegramId,
+        telegramUsername,
+        telegramFirstName: Object.prototype.hasOwnProperty.call(rawUser, 'telegramFirstName')
+            ? normalizeOptionalString(rawUser.telegramFirstName, 80)
+            : previous?.telegramFirstName,
+        telegramLastName: Object.prototype.hasOwnProperty.call(rawUser, 'telegramLastName')
+            ? normalizeOptionalString(rawUser.telegramLastName, 80)
+            : previous?.telegramLastName,
+        streak: normalizeInteger(rawUser.streak, previous?.streak || 0),
+        lastLoginDate: normalizeOptionalString(rawUser.lastLoginDate, 32)
+    };
+}
+
+function validateFamilyMembers(members: User[]) {
+    if (!members.some(member => member.isActive !== false && member.role === 'OWNER')) {
+        throw badRequest('At least one active owner is required');
+    }
+    const ids = new Set<string>();
+    const telegramIds = new Map<number, string>();
+    for (const member of members) {
+        if (ids.has(member.id)) {
+            throw badRequest('Family member ids must be unique');
+        }
+        ids.add(member.id);
+        if (!member.telegramId) continue;
+        const existing = telegramIds.get(member.telegramId);
+        if (existing && existing !== member.id) {
+            throw badRequest('Telegram ID must be unique');
+        }
+        telegramIds.set(member.telegramId, member.id);
+    }
+}
+
+function normalizeRole(value: unknown, fallback: Role): Role {
+    return value === 'OWNER' || value === 'ADMIN' || value === 'CHILD' ? value : fallback;
+}
+
+function normalizeTelegramId(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+}
+
+function normalizeTelegramUsername(value: unknown) {
+    const username = normalizeOptionalString(value, 64)?.replace(/^@+/, '');
+    return username || undefined;
+}
+
+function normalizeString(value: unknown, fallback: string, maxLength: number) {
+    if (typeof value !== 'string') return fallback;
+    const trimmed = value.trim();
+    return (trimmed || fallback).slice(0, maxLength);
+}
+
+function normalizeOptionalString(value: unknown, maxLength: number) {
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed ? trimmed.slice(0, maxLength) : undefined;
+}
+
+function normalizeInteger(value: unknown, fallback: number) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(0, Math.round(number));
+}
+
+function badRequest(message: string) {
+    return Object.assign(new Error(message), { status: 400 });
 }
 
 async function readJsonBody(req: IncomingMessage) {
@@ -262,6 +428,7 @@ function resolveActor(auth: AuthContext, data: AppData, req: IncomingMessage): U
     const username = auth.username?.toLowerCase();
 
     const actor = data.members.find(member => {
+        if (member.isActive === false) return false;
         if (telegramId && member.telegramId === telegramId) return true;
         return !!username && member.telegramUsername?.toLowerCase() === username;
     });

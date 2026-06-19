@@ -12,11 +12,18 @@ import {
   Backpack,
   Ticket,
   CheckCheck,
-  Clock
+  Clock,
+  UserPlus,
+  Pencil,
+  Archive,
+  RotateCcw,
+  Save,
+  ShieldCheck
 } from 'lucide-react';
 import { AppData } from './types';
 import { User, Reward, InventoryItem, calculateLevel, getLevelProgress, getNextLevelXp } from './family.model';
 import { Avatar, Modal, Screen, SectionHeader, SegmentedControl } from './ui-kit';
+import { generateId } from './utils';
 
 // --- Components ---
 
@@ -125,21 +132,282 @@ export const InventoryItemCard = ({ item, reward, onConsume }: { key?: React.Key
     )
 };
 
+const roleLabels: Record<User['role'], string> = {
+    OWNER: 'Владелец',
+    ADMIN: 'Админ',
+    CHILD: 'Ребёнок'
+};
+
+const createBlankUser = (): User => ({
+    id: generateId(),
+    name: 'Новый участник',
+    role: 'CHILD',
+    avatar: '👦🏻',
+    xp: 0,
+    level: 1,
+    streak: 0,
+    isActive: true
+});
+
+const FamilyMemberEditor = ({
+    user,
+    onSave,
+    onClose
+}: {
+    user: User,
+    onSave: (user: User) => void,
+    onClose: () => void
+}) => {
+    const [name, setName] = useState(user.name);
+    const [role, setRole] = useState<User['role']>(user.role);
+    const [avatar, setAvatar] = useState(user.avatar);
+    const [telegramId, setTelegramId] = useState(user.telegramId ? String(user.telegramId) : '');
+    const [telegramUsername, setTelegramUsername] = useState(user.telegramUsername || '');
+    const [xp, setXp] = useState(String(user.xp || 0));
+    const [level, setLevel] = useState(String(user.level || 1));
+
+    const submit = () => {
+        const parsedTelegramId = telegramId.trim() ? Number(telegramId.trim()) : undefined;
+        onSave({
+            ...user,
+            name: name.trim() || user.name,
+            role,
+            avatar: avatar.trim() || user.avatar,
+            telegramId: Number.isFinite(parsedTelegramId) ? parsedTelegramId : undefined,
+            telegramUsername: telegramUsername.trim().replace(/^@+/, '') || undefined,
+            xp: Math.max(0, Math.round(Number(xp) || 0)),
+            level: Math.max(1, Math.round(Number(level) || 1)),
+            isActive: user.isActive !== false
+        });
+        onClose();
+    };
+
+    return (
+        <div className="space-y-4 pb-4">
+            <div className="grid grid-cols-[72px_1fr] gap-3 items-end">
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Аватар</span>
+                    <input
+                        value={avatar}
+                        onChange={event => setAvatar(event.target.value)}
+                        maxLength={8}
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-center text-2xl bg-white"
+                    />
+                </label>
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Имя</span>
+                    <input
+                        value={name}
+                        onChange={event => setName(event.target.value)}
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm font-bold bg-white"
+                    />
+                </label>
+            </div>
+
+            <label className="space-y-1 block">
+                <span className="text-[11px] font-bold text-gray-400 uppercase">Роль</span>
+                <select
+                    value={role}
+                    onChange={event => setRole(event.target.value as User['role'])}
+                    className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm font-bold bg-white"
+                >
+                    <option value="OWNER">Владелец</option>
+                    <option value="ADMIN">Админ</option>
+                    <option value="CHILD">Ребёнок</option>
+                </select>
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Telegram ID</span>
+                    <input
+                        inputMode="numeric"
+                        value={telegramId}
+                        onChange={event => setTelegramId(event.target.value)}
+                        placeholder="123456789"
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm bg-white"
+                    />
+                </label>
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Username</span>
+                    <input
+                        value={telegramUsername}
+                        onChange={event => setTelegramUsername(event.target.value)}
+                        placeholder="username"
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm bg-white"
+                    />
+                </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">XP</span>
+                    <input
+                        inputMode="numeric"
+                        value={xp}
+                        onChange={event => setXp(event.target.value)}
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm bg-white"
+                    />
+                </label>
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Уровень</span>
+                    <input
+                        inputMode="numeric"
+                        value={level}
+                        onChange={event => setLevel(event.target.value)}
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm bg-white"
+                    />
+                </label>
+            </div>
+
+            <button
+                onClick={submit}
+                className="w-full h-11 rounded-xl bg-black text-white text-sm font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+            >
+                <Save size={16} />
+                Сохранить
+            </button>
+        </div>
+    );
+};
+
+const FamilyAdminPanel = ({
+    data,
+    onSaveUser,
+    onArchiveUser,
+    onRestoreUser
+}: {
+    data: AppData,
+    onSaveUser: (user: User) => void,
+    onArchiveUser: (id: string) => void,
+    onRestoreUser: (id: string) => void
+}) => {
+    const [editingUser, setEditingUser] = useState<User | null>(null);
+    const archivedMembers = data.archivedMembers || [];
+    const activeOwners = data.members.filter(user => user.role === 'OWNER').length;
+
+    const canArchive = (user: User) => {
+        if (user.id === data.currentUser.id) return false;
+        if (user.role === 'OWNER' && activeOwners <= 1) return false;
+        return true;
+    };
+
+    const archive = (user: User) => {
+        if (!canArchive(user)) return;
+        if (confirm(`Архивировать ${user.name}? История сохранится.`)) {
+            onArchiveUser(user.id);
+        }
+    };
+
+    return (
+        <div className="space-y-5 animate-in fade-in slide-in-from-right-4 duration-300">
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-[17px] font-bold leading-tight">Состав семьи</h2>
+                    <p className="text-xs text-gray-400">Активные профили и Telegram-привязки</p>
+                </div>
+                <button
+                    onClick={() => setEditingUser(createBlankUser())}
+                    className="h-10 px-3 rounded-xl bg-black text-white text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform"
+                >
+                    <UserPlus size={16} />
+                    Добавить
+                </button>
+            </div>
+
+            <div className="space-y-2">
+                {data.members.map(user => (
+                    <div key={user.id} className="bg-white border border-gray-100 rounded-[14px] p-3 flex items-center gap-3 shadow-sm">
+                        <Avatar user={user} size="md" />
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-sm truncate">{user.name}</span>
+                                {user.role === 'OWNER' && <ShieldCheck size={14} className="text-yellow-500 shrink-0" />}
+                            </div>
+                            <div className="text-[11px] text-gray-400 truncate">
+                                {roleLabels[user.role]}
+                                {user.telegramId ? ` · ${user.telegramId}` : ''}
+                                {user.telegramUsername ? ` · @${user.telegramUsername}` : ''}
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setEditingUser(user)}
+                            className="w-9 h-9 rounded-xl bg-gray-100 text-gray-700 flex items-center justify-center"
+                            aria-label={`Редактировать ${user.name}`}
+                        >
+                            <Pencil size={16} />
+                        </button>
+                        <button
+                            onClick={() => archive(user)}
+                            disabled={!canArchive(user)}
+                            className="w-9 h-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center disabled:opacity-30"
+                            aria-label={`Архивировать ${user.name}`}
+                        >
+                            <Archive size={16} />
+                        </button>
+                    </div>
+                ))}
+            </div>
+
+            {archivedMembers.length > 0 && (
+                <div className="space-y-2">
+                    <SectionHeader title="Архив" />
+                    {archivedMembers.map(user => (
+                        <div key={user.id} className="bg-gray-50 border border-gray-100 rounded-[14px] p-3 flex items-center gap-3 opacity-80">
+                            <Avatar user={user} size="md" />
+                            <div className="min-w-0 flex-1">
+                                <div className="font-bold text-sm truncate">{user.name}</div>
+                                <div className="text-[11px] text-gray-400">{roleLabels[user.role]}</div>
+                            </div>
+                            <button
+                                onClick={() => onRestoreUser(user.id)}
+                                className="h-9 px-3 rounded-xl bg-white border border-gray-200 text-gray-800 text-xs font-bold flex items-center gap-2"
+                            >
+                                <RotateCcw size={15} />
+                                Вернуть
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <Modal
+                isOpen={!!editingUser}
+                onClose={() => setEditingUser(null)}
+                title={editingUser && data.members.some(user => user.id === editingUser.id) ? 'Участник' : 'Новый участник'}
+            >
+                {editingUser && (
+                    <FamilyMemberEditor
+                        user={editingUser}
+                        onSave={onSaveUser}
+                        onClose={() => setEditingUser(null)}
+                    />
+                )}
+            </Modal>
+        </div>
+    );
+};
+
 // --- Screens ---
 
 export const FamilyScreen = ({ 
     data, 
-    onUpdateUser, 
+    onSaveUser,
+    onArchiveUser,
+    onRestoreUser,
     onBuyReward,
     onConsumeItem
 }: { 
     data: AppData, 
-    onUpdateUser: (u: User) => void,
+    onSaveUser: (u: User) => void,
+    onArchiveUser: (id: string) => void,
+    onRestoreUser: (id: string) => void,
     onBuyReward: (reward: Reward) => void,
     onConsumeItem?: (item: InventoryItem, rewardTitle: string) => void
 }) => {
-    const [activeTab, setActiveTab] = useState<'MEMBERS' | 'SHOP' | 'INVENTORY'>('MEMBERS');
+    const [activeTab, setActiveTab] = useState<'MEMBERS' | 'SHOP' | 'INVENTORY' | 'ADMIN'>('MEMBERS');
     const [isHistoryOpen, setHistoryOpen] = useState(false);
+    const isOwner = data.currentUser.role === 'OWNER';
 
     const history = [...data.rewardLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 20);
     
@@ -166,7 +434,8 @@ export const FamilyScreen = ({
                     options={[
                         { value: 'MEMBERS', label: 'Участники' },
                         { value: 'INVENTORY', label: 'Рюкзак', icon: Backpack },
-                        { value: 'SHOP', label: 'Магазин', icon: ShoppingBag }
+                        { value: 'SHOP', label: 'Магазин', icon: ShoppingBag },
+                        ...(isOwner ? [{ value: 'ADMIN' as const, label: 'Состав', icon: ShieldCheck }] : [])
                     ]}
                  />
             </div>
@@ -286,6 +555,15 @@ export const FamilyScreen = ({
                 </div>
             )}
 
+            {activeTab === 'ADMIN' && isOwner && (
+                <FamilyAdminPanel
+                    data={data}
+                    onSaveUser={onSaveUser}
+                    onArchiveUser={onArchiveUser}
+                    onRestoreUser={onRestoreUser}
+                />
+            )}
+
             {/* History Modal */}
             <Modal isOpen={isHistoryOpen} onClose={() => setHistoryOpen(false)} title="История наград">
                 <div className="space-y-3 pb-10">
@@ -293,7 +571,7 @@ export const FamilyScreen = ({
                         <div className="text-center text-gray-400 py-4">История пуста</div>
                     ) : (
                         history.map(log => {
-                            const user = data.members.find(m => m.id === log.userId);
+                            const user = [...data.members, ...(data.archivedMembers || [])].find(m => m.id === log.userId);
                             return (
                                 <div key={log.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                                     <div className="flex items-center gap-3">

@@ -49,6 +49,9 @@ FAMTRACK_ALLOWED_TELEGRAM_USERNAMES=
 FAMTRACK_PUBLIC_HOST=famtrack.example.com
 FAMTRACK_PUBLIC_PORT=
 FAMTRACK_PUBLIC_URL=
+FAMTRACK_TELEGRAM_BOT_USERNAME=NqpFamBot
+FAMTRACK_TELEGRAM_APP_NAME=
+FAMTRACK_MINIAPP_DIRECT_URL=
 FAMTRACK_SESSION_SECRET=generate-a-long-random-value
 FAMTRACK_INTERNAL_API_SECRET=generate-a-long-random-value
 FAMTRACK_AUTH_MODE=telegram
@@ -73,6 +76,8 @@ Compose публикует контейнер только на `127.0.0.1:18080
 ## Telegram agent and MCP
 
 `agent/famtrack_agent.py` — long-polling Telegram agent for the home server. It uses the same bot token and allowlist as the Mini App, answers family commands, and keeps owner-only `/plan` and `/agent` flows behind `FAMTRACK_OWNER_TELEGRAM_IDS`.
+
+Group chats do not show the private chat Mini App menu button. Use `/app` or `/open`; when `FAMTRACK_TELEGRAM_APP_NAME` or `FAMTRACK_MINIAPP_DIRECT_URL` is configured after BotFather `/newapp`, the agent sends the `https://t.me/<bot>/<app>` Mini App link.
 
 `mcp/famtrack_mcp.py` — stdio MCP bridge for Codex/tools. Reads and writes go through the FamTrack HTTP API, so Telegram identity and RBAC stay enforced by the backend.
 

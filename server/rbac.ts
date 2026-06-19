@@ -20,7 +20,17 @@ export const canSee = (
 };
 
 export const filterForActor = (data: AppData, actor: User): AppData => {
-    if (isOwner(actor)) return { ...data, currentUser: actor };
+    const activeMembers = data.members.filter(member => member.isActive !== false);
+    const archivedMembers = data.members.filter(member => member.isActive === false);
+
+    if (isOwner(actor)) {
+        return {
+            ...data,
+            currentUser: actor,
+            members: activeMembers,
+            archivedMembers
+        };
+    }
 
     const epics = data.epics.filter(item => canSee(item, actor));
     const accounts = data.accounts.filter(item => canSee(item, actor));
@@ -33,6 +43,8 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
     return {
         ...data,
         currentUser: actor,
+        members: activeMembers,
+        archivedMembers: [],
         epics,
         tasks: data.tasks.filter(item => canSee(item, actor)),
         accounts,
@@ -79,13 +91,17 @@ export const assertCanWrite = (actor: User, pathname: string, body: Record<strin
             if (user && previous && user.id === actor.id && preservesIdentity(previous, user)) return;
             break;
         }
+        case '/api/users/save':
+        case '/api/users/archive':
+        case '/api/users/restore':
+            break;
     }
 
     throw new ForbiddenError('You are not allowed to perform this FamTrack action');
 };
 
 export const sanitizeBatchUpdates = (actor: User, updates: Partial<AppData>, data: AppData): Partial<AppData> => {
-    const { currentUser: _ignoredCurrentUser, ...rest } = updates;
+    const { currentUser: _ignoredCurrentUser, archivedMembers: _ignoredArchivedMembers, ...rest } = updates;
     if (isOwner(actor)) return rest;
 
     const adminAllowedKeys = new Set<keyof AppData>([
@@ -177,5 +193,6 @@ export const preservesIdentity = (previous: User, next: User) => {
         && previous.telegramId === next.telegramId
         && previous.telegramUsername === next.telegramUsername
         && previous.name === next.name
-        && previous.avatar === next.avatar;
+        && previous.avatar === next.avatar
+        && (previous.isActive !== false) === (next.isActive !== false);
 };

@@ -285,10 +285,32 @@ export const useAppStore = () => {
   };
 
   const updateUser = (updatedUser: User) => {
-      const newMembers = data.members.map(m => m.id === updatedUser.id ? updatedUser : m);
-      mutations.batchUpdate.mutate({ 
-          members: newMembers,
-          currentUser: data.currentUser.id === updatedUser.id ? updatedUser : data.currentUser
+      mutations.saveUser.mutate(updatedUser, {
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить профиль', 'ERROR')
+      });
+      TWA.haptic('light');
+  };
+
+  const saveFamilyUser = (user: User) => {
+      mutations.saveUser.mutate(user, {
+          onSuccess: () => addToast('Состав семьи обновлён', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить участника', 'ERROR')
+      });
+      TWA.haptic('light');
+  };
+
+  const archiveFamilyUser = (id: string) => {
+      mutations.archiveUser.mutate(id, {
+          onSuccess: () => addToast('Участник перемещён в архив', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось архивировать участника', 'ERROR')
+      });
+      TWA.haptic('medium');
+  };
+
+  const restoreFamilyUser = (id: string) => {
+      mutations.restoreUser.mutate(id, {
+          onSuccess: () => addToast('Участник восстановлен', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось восстановить участника', 'ERROR')
       });
       TWA.haptic('light');
   };
@@ -585,7 +607,7 @@ export const useAppStore = () => {
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
       finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal, saveSubscription, deleteSubscription, paySubscription },
       epics: { save: saveEpic },
-      family: { updateUser, buyReward, consumeItem },
+      family: { updateUser, saveUser: saveFamilyUser, archiveUser: archiveFamilyUser, restoreUser: restoreFamilyUser, buyReward, consumeItem },
       shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList }
     }
   };

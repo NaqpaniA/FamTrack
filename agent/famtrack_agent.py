@@ -35,6 +35,9 @@ TELEGRAM_PROXY = os.environ.get("FAMTRACK_AGENT_TELEGRAM_PROXY", "").strip()
 FAMTRACK_PUBLIC_HOST = os.environ.get("FAMTRACK_PUBLIC_HOST", "").strip()
 FAMTRACK_PUBLIC_PORT = os.environ.get("FAMTRACK_PUBLIC_PORT", "").strip()
 FAMTRACK_PUBLIC_URL = os.environ.get("FAMTRACK_PUBLIC_URL", "").strip()
+FAMTRACK_TELEGRAM_BOT_USERNAME = os.environ.get("FAMTRACK_TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+FAMTRACK_TELEGRAM_APP_NAME = os.environ.get("FAMTRACK_TELEGRAM_APP_NAME", "").strip().strip("/")
+FAMTRACK_MINIAPP_DIRECT_URL = os.environ.get("FAMTRACK_MINIAPP_DIRECT_URL", "").strip()
 STATE_DIR = Path(os.environ.get("FAMTRACK_AGENT_STATE_DIR", str(Path.home() / ".local/state/famtrack-agent")))
 AUDIT_LOG = STATE_DIR / "audit.jsonl"
 PENDING_FILE = STATE_DIR / "pending.json"
@@ -196,9 +199,41 @@ def mini_app_url() -> str:
     return ""
 
 
+def mini_app_direct_url(bot_username: str = "") -> str:
+    if FAMTRACK_MINIAPP_DIRECT_URL:
+        return FAMTRACK_MINIAPP_DIRECT_URL.rstrip("/")
+    username = (FAMTRACK_TELEGRAM_BOT_USERNAME or bot_username).strip().lstrip("@")
+    if username and FAMTRACK_TELEGRAM_APP_NAME:
+        return f"https://t.me/{username}/{FAMTRACK_TELEGRAM_APP_NAME}"
+    return ""
+
+
+def app_entry_url(bot_username: str = "") -> str:
+    return mini_app_direct_url(bot_username) or mini_app_url()
+
+
+def app_entry_message(bot_username: str = "") -> str:
+    direct_url = mini_app_direct_url(bot_username)
+    public_url = mini_app_url()
+    if direct_url:
+        return f"Открыть FamTrack:\n{direct_url}"
+    if public_url:
+        return (
+            "В групповом чате Telegram не показывает постоянную кнопку Mini App. "
+            "Пока direct link из BotFather не задан, открой приложение из личного чата с ботом "
+            "или по HTTPS-ссылке:\n"
+            f"{public_url}\n\n"
+            "Для полноценной групповой ссылки создай Mini App через BotFather /newapp "
+            "и задай FAMTRACK_TELEGRAM_APP_NAME."
+        )
+    return "FamTrack URL не настроен. Нужен FAMTRACK_PUBLIC_URL или Mini App link из BotFather /newapp."
+
+
 def configure_bot_surface(telegram: "Telegram") -> None:
     commands = [
         ("help", "команды FamTrack"),
+        ("app", "открыть Mini App"),
+        ("open", "ссылка на FamTrack"),
         ("whoami", "кто я в системе"),
         ("status", "статус сервера"),
         ("projects", "проекты"),
@@ -516,6 +551,11 @@ def handle_command(client: FamTrackClient, telegram: Telegram, message: dict[str
     if command in ("", "/help", "help"):
         telegram.send_message(chat_id, HELP_TEXT, message_id)
         return
+    if command in ("/app", "app", "/open", "open"):
+        url = app_entry_url(bot_username)
+        keyboard = {"inline_keyboard": [[{"text": "Открыть FamTrack", "url": url}]]} if url else None
+        telegram.send_message(chat_id, app_entry_message(bot_username), message_id, keyboard)
+        return
     if command == "/whoami":
         data = client.get_data(telegram_user)
         user = data["data"]["currentUser"]
@@ -616,6 +656,8 @@ def handle_callback(telegram: Telegram, callback: dict[str, Any]) -> None:
 
 
 HELP_TEXT = """FamTrack agent:
+/app
+/open
 /whoami
 /status
 /projects

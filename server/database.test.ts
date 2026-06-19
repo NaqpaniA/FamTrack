@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { FamTrackDatabase, RevisionConflictError } from './database.js';
 import { AuthError, validateRequestAuth } from './auth.js';
-import { ForbiddenError, filterForActor, sanitizeBatchUpdates } from './rbac.js';
+import { ForbiddenError, assertCanWrite, filterForActor, sanitizeBatchUpdates } from './rbac.js';
 
 const tempDbPath = () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'famtrack-'));
@@ -18,12 +18,32 @@ test('database migrations are idempotent and seed initial data', async () => {
     const first = await FamTrackDatabase.open(dbPath);
     assert.equal(first.getRevision(), 1);
     assert.ok(first.getAppData().members.length > 0);
+    assert.ok(!first.getAppData().members.some(member => member.id === 'u4' && member.isActive !== false));
     first.close();
 
     const second = await FamTrackDatabase.open(dbPath);
     assert.equal(second.getRevision(), 1);
     assert.ok(second.getAppData().tasks.length > 0);
     second.close();
+});
+
+test('legacy seed daughter is archived without deleting history', async () => {
+    const dbPath = tempDbPath();
+    const db = await FamTrackDatabase.open(dbPath);
+    const before = db.exportEnvelope();
+    db.mutate(before.revision, data => ({
+        ...data,
+        members: [
+            ...data.members,
+            { id: 'u4', name: 'Дочь', role: 'CHILD', avatar: 'x', xp: 100, level: 2, streak: 0, isActive: true }
+        ]
+    }));
+    db.close();
+
+    const reopened = await FamTrackDatabase.open(dbPath);
+    const legacy = reopened.getAppData().members.find(member => member.id === 'u4');
+    assert.equal(legacy?.isActive, false);
+    reopened.close();
 });
 
 test('stale revisions are rejected', async () => {
@@ -112,6 +132,47 @@ test('owner sees private family data and admin does not', async () => {
 
     assert.ok(filterForActor(next, owner).tasks.some(task => task.id === privateTask.id));
     assert.ok(!filterForActor(next, admin).tasks.some(task => task.id === privateTask.id));
+    db.close();
+});
+
+test('owner receives archived members separately and non-owner only sees active members', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const data = db.getAppData();
+    const owner = { ...data.members[0], role: 'OWNER' as const };
+    const admin = { ...data.members[1], role: 'ADMIN' as const };
+    const archived = { ...data.members[2], id: 'archived-child', name: 'Archived', isActive: false };
+    const next = {
+        ...data,
+        currentUser: owner,
+        members: [owner, admin, data.members[2], archived]
+    };
+
+    const ownerData = filterForActor(next, owner);
+    const adminData = filterForActor(next, admin);
+
+    assert.ok(!ownerData.members.some(member => member.id === archived.id));
+    assert.ok(ownerData.archivedMembers?.some(member => member.id === archived.id));
+    assert.ok(!adminData.members.some(member => member.id === archived.id));
+    assert.equal(adminData.archivedMembers?.length, 0);
+    db.close();
+});
+
+test('family management endpoints are owner-only', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const data = db.getAppData();
+    const owner = { ...data.members[0], role: 'OWNER' as const };
+    const admin = { ...data.members[1], role: 'ADMIN' as const };
+    const newUser = { id: 'new-child', name: 'Kid', role: 'CHILD' as const, avatar: 'x', xp: 0, level: 1, streak: 0, isActive: true };
+
+    assert.doesNotThrow(() => assertCanWrite(owner, '/api/users/save', { user: newUser }, data));
+    assert.throws(
+        () => assertCanWrite(admin, '/api/users/save', { user: newUser }, data),
+        ForbiddenError
+    );
+    assert.throws(
+        () => assertCanWrite(admin, '/api/users/archive', { id: owner.id }, data),
+        ForbiddenError
+    );
     db.close();
 });
 

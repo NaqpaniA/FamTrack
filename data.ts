@@ -6,7 +6,6 @@ export const MOCK_USERS: User[] = [
   { id: 'u1', name: 'Папа', role: 'OWNER', avatar: '👨🏻', xp: 2450, level: 5, telegramUsername: 'Naqpania', streak: 5, lastLoginDate: new Date().toISOString().split('T')[0] },
   { id: 'u2', name: 'Мама', role: 'ADMIN', avatar: '👩🏼', xp: 2100, level: 4, streak: 12, lastLoginDate: new Date().toISOString().split('T')[0] },
   { id: 'u3', name: 'Сын', role: 'CHILD', avatar: '👦🏻', xp: 850, level: 3, streak: 1 },
-  { id: 'u4', name: 'Дочь', role: 'CHILD', avatar: '👧🏼', xp: 1200, level: 3, streak: 0 },
 ];
 
 export const INITIAL_DATA: AppData = {

@@ -69,7 +69,7 @@ export const SettingsModal = ({
             </div>
 
             <div className="text-center pt-4">
-                <p className="text-[10px] text-gray-300">Family OS v1.0 • Powered by Gemini</p>
+                <p className="text-[10px] text-gray-300">FamTrack v1.0 • Self-hosted</p>
             </div>
         </div>
     );

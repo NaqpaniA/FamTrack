@@ -201,7 +201,9 @@ const App = () => {
           {activeTab === 'FAMILY' && (
               <FamilyScreen 
                 data={data} 
-                onUpdateUser={actions.family.updateUser} 
+                onSaveUser={actions.family.saveUser}
+                onArchiveUser={actions.family.archiveUser}
+                onRestoreUser={actions.family.restoreUser}
                 onBuyReward={actions.family.buyReward}
                 onConsumeItem={actions.family.consumeItem}
               />

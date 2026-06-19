@@ -10,6 +10,7 @@ export interface User {
   avatar: string; // Emoji
   xp: number;
   level: number;
+  isActive?: boolean;
   telegramId?: number;
   telegramUsername?: string;
   telegramFirstName?: string;

@@ -1,7 +1,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import { AppData } from './types';
+import { AppData, User } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
 import { INITIAL_DATA } from './data';
@@ -113,6 +113,21 @@ export const useMutations = () => {
         
         saveEpic: useMutation({
             mutationFn: (epic: Epic) => api.saveEpic(epic),
+            onSettled: () => invalidate()
+        }),
+
+        saveUser: useMutation({
+            mutationFn: (user: User) => api.saveUser(user),
+            onSettled: () => invalidate()
+        }),
+
+        archiveUser: useMutation({
+            mutationFn: (id: string) => api.archiveUser(id),
+            onSettled: () => invalidate()
+        }),
+
+        restoreUser: useMutation({
+            mutationFn: (id: string) => api.restoreUser(id),
             onSettled: () => invalidate()
         }),
 
