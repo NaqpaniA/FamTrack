@@ -1,0 +1,105 @@
+@startuml
+title
+FamTrack - AuthN/AuthZ и RBAC
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam defaultFontName "DejaVu Sans"
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+
+start
+:HTTP request to /api/*;
+
+if (route == /api/health?) then (да)
+  :Вернуть health без Telegram auth;
+  stop
+endif
+
+:Прочитать X-Telegram-Init-Data\nили internal secret header;
+
+if (internal secret valid?) then (да)
+  :AuthContext {isInternal=true};
+  if (actor Telegram header present?) then (да)
+    :Использовать actor Telegram ID\nдля agent/MCP действия;
+  else (нет)
+    :Только internal route разрешён;
+  endif
+else (нет)
+  if (auth mode == dev?) then (да)
+    :AuthContext dev actor;
+  else (telegram)
+    :Проверить Telegram HMAC;
+    if (signature valid?) then (да)
+      :Извлечь telegram_id, username, first_name;
+      if (allowlist enforced and user not allowed?) then (да)
+        :401 AuthError;
+        stop
+      endif
+    else (нет)
+      :401 AuthError;
+      stop
+    endif
+  endif
+endif
+
+:resolveActor(auth);
+if (active user found?) then (да)
+  :RequestContext {actor, familyId, developerOwner};
+else (нет)
+  :403 Forbidden\nidentity не связана с профилем;
+  stop
+endif
+
+if (method == GET app-data?) then (read)
+  :exportEnvelope(actor);
+  :filterForActor(data, actor);
+  :Вернуть видимую модель;
+  stop
+endif
+
+if (route == family invite create?) then (invite)
+  if (new family invite?) then (да)
+    if (developerOwner?) then (да)
+      :createFamilyInvite(new family);
+    else (нет)
+      :403 Forbidden;
+      stop
+    endif
+  else (family invite)
+    if (actor is OWNER?) then (да)
+      :createFamilyInvite(existing family);
+    else (нет)
+      :403 Forbidden;
+      stop
+    endif
+  endif
+endif
+
+if (route == /api/batch?) then (batch)
+  :sanitizeBatchUpdates(actor, updates, currentData);
+  if (forbidden key or hidden item?) then (да)
+    :403 Forbidden;
+    stop
+  endif
+else (specific route)
+  :assertCanWrite(actor, pathname, body, currentData);
+  if (not allowed?) then (да)
+    :403 Forbidden;
+    stop
+  endif
+endif
+
+:FamTrackDatabase.mutate();
+:filterForActor(nextData, actor);
+:Вернуть {revision, data};
+stop
+
+@enduml
+

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Layout, CheckSquare, Wallet, Users, Loader2, ShoppingBag } from 'lucide-react';
+import { ArrowRight, Bot, CheckSquare, Layout, Loader2, MessageCircle, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles.css';
 
@@ -10,6 +10,8 @@ import { Task, Epic } from './tasks.model';
 import { Transaction, Account } from './finance.model';
 import { isVisible, TWA } from './utils';
 import { useAppStore } from './store';
+import { api } from './api';
+import { KEYS } from './queries';
 
 // UI Modules
 import { DashboardScreen } from './dashboard.ui';
@@ -19,6 +21,7 @@ import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from '.
 import { ShoppingScreen } from './shopping.ui';
 import { SettingsModal } from './settings.ui';
 import { BottomNav, Modal, ToastContainer, StreakModal } from './ui-kit';
+import { NotesSheet } from './notes.ui';
 
 // --- Query Client Setup ---
 const queryClient = new QueryClient({
@@ -30,7 +33,109 @@ const queryClient = new QueryClient({
     }
 });
 
-const App = () => {
+const useTelegramShell = () => {
+  useEffect(() => {
+      TWA.ready();
+      TWA.expand();
+      TWA.enableClosingConfirmation();
+      document.documentElement.style.setProperty('color-scheme', 'light');
+      document.body.style.backgroundColor = '#f5f6f8';
+      document.body.style.color = '#0f172a';
+      document.body.style.setProperty('color-scheme', 'light');
+  }, []);
+};
+
+const readInviteToken = () => new URLSearchParams(window.location.search).get('invite');
+
+const InviteOnboardingScreen = ({ token, onAccepted }: { token: string, onAccepted: () => void }) => {
+  const [isAccepting, setAccepting] = useState(false);
+  const [error, setError] = useState('');
+
+  const acceptInvite = async () => {
+      if (isAccepting) return;
+      setAccepting(true);
+      setError('');
+      try {
+          const nextData = await api.acceptFamilyInvite(token);
+          queryClient.setQueryData(KEYS.DATA, nextData);
+          const params = new URLSearchParams(window.location.search);
+          params.delete('invite');
+          const nextSearch = params.toString();
+          window.history.replaceState({}, '', `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`);
+          onAccepted();
+      } catch (inviteError) {
+          setError(inviteError instanceof Error ? inviteError.message : 'Не удалось принять приглашение');
+      } finally {
+          setAccepting(false);
+      }
+  };
+
+  return (
+    <div className="min-h-[100svh] bg-[#f5f6f8] text-gray-950 px-5 py-6 flex flex-col">
+      <div className="max-w-md mx-auto w-full flex-1 flex flex-col gap-5">
+        <div className="rounded-[18px] overflow-hidden border border-gray-200 bg-white shadow-sm">
+          <img
+            src="/famtrack-demo.gif"
+            alt="FamTrack: задачи, покупки и семейные финансы"
+            className="w-full aspect-[16/10] object-cover bg-gray-100"
+          />
+        </div>
+
+        <div>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-bold mb-3">
+            <ShieldCheck size={14} />
+            Отдельная семейная зона
+          </div>
+          <h1 className="text-[28px] leading-tight font-black">Вас пригласили в FamTrack</h1>
+          <p className="text-sm text-gray-500 mt-2">
+            Примите приглашение из своего Telegram-аккаунта. Данные этой семьи будут видны только её участникам.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          {[
+            ['1', 'Нажмите кнопку ниже, чтобы создать профиль владельца семьи.'],
+            ['2', 'В приложении откройте «Семья → Состав → Инвайт» и пригласите остальных.'],
+            ['3', 'Групповой чат с ботом можно создать потом: он нужен для команд и быстрых ссылок.']
+          ].map(([step, text]) => (
+            <div key={step} className="bg-white border border-gray-100 rounded-[14px] p-3 flex gap-3 shadow-sm">
+              <div className="w-7 h-7 rounded-full bg-black text-white text-xs font-bold flex items-center justify-center shrink-0">{step}</div>
+              <div className="text-sm text-gray-700 leading-snug">{text}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-white border border-gray-100 rounded-[14px] p-3 shadow-sm flex items-start gap-3">
+          <Bot size={22} className="text-blue-600 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-bold text-sm">Про групповой чат</div>
+            <div className="text-xs text-gray-500 mt-1">
+              Чат не обязателен для входа. Если добавите туда бота, семья сможет писать команды вроде /app, /tasks и /shopping.
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-100 text-red-700 rounded-[14px] p-3 text-sm">
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={acceptInvite}
+          disabled={isAccepting}
+          className="mt-auto h-14 rounded-2xl bg-black text-white font-bold flex items-center justify-center gap-2 shadow-xl disabled:opacity-60 active:scale-[0.98] transition-transform"
+        >
+          {isAccepting ? <Loader2 className="animate-spin" size={20} /> : <MessageCircle size={20} />}
+          {isAccepting ? 'Принимаю...' : 'Принять приглашение'}
+          {!isAccepting && <ArrowRight size={20} />}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const FamTrackApp = () => {
   const { data, isLoading, toasts, bonusData, removeToast, closeBonusModal, actions } = useAppStore();
   
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
@@ -42,6 +147,11 @@ const App = () => {
   const [isAccModalOpen, setAccModalOpen] = useState(false);
   const [isBudgetModalOpen, setBudgetModalOpen] = useState(false);
   const [isSettingsOpen, setSettingsOpen] = useState(false);
+  const [notesSheet, setNotesSheet] = useState<{ open: boolean; initialMode: 'list' | 'new'; requestId: number }>({
+      open: false,
+      initialMode: 'list',
+      requestId: 0
+  });
   
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -49,14 +159,6 @@ const App = () => {
   
   const [activeEpicFilter, setActiveEpicFilter] = useState<string | undefined>(undefined);
   const [initialEpicData, setInitialEpicData] = useState<Partial<Epic> | undefined>(undefined);
-
-  // --- Init TWA ---
-  useEffect(() => {
-      TWA.ready();
-      TWA.expand();
-      TWA.enableClosingConfirmation();
-      document.body.style.backgroundColor = '#f5f6f8';
-  }, []);
 
   // --- Daily Streak Check ---
   useEffect(() => {
@@ -71,6 +173,15 @@ const App = () => {
   const handleNavigate = (tab: Tab, epicFilter?: string) => {
       setActiveTab(tab);
       setActiveEpicFilter(epicFilter);
+      TWA.selection();
+  };
+
+  const openNotes = (initialMode: 'list' | 'new' = 'list') => {
+      setNotesSheet(prev => ({
+          open: true,
+          initialMode,
+          requestId: prev.requestId + 1
+      }));
       TWA.selection();
   };
 
@@ -117,6 +228,15 @@ const App = () => {
       setInitialEpicData(undefined);
   };
 
+  const handleEpicDelete = (id: string) => {
+      if (confirm('Удалить проект? Задачи останутся без проекта.')) {
+          actions.epics.delete(id);
+          if (activeEpicFilter === id) setActiveEpicFilter(undefined);
+          setEpicModalOpen(false);
+          setInitialEpicData(undefined);
+      }
+  };
+
   // --- Render ---
   
   if (isLoading) {
@@ -160,16 +280,25 @@ const App = () => {
                 onNavigate={handleNavigate}
                 onAddEpic={() => openEpicModal()}
                 onOpenProfile={() => setSettingsOpen(true)}
+                onOpenNotes={() => openNotes('list')}
+                onAddNote={() => openNotes('new')}
               />
           )}
           {activeTab === 'TASKS' && (
               <TasksScreen 
-                data={data} 
-                onTaskClick={t => { setEditingTask(t); setTaskModalOpen(true); }} 
-                onAddTask={() => { setEditingTask(null); setTaskModalOpen(true); }}
-                onStatusChange={actions.tasks.toggleStatus}
-                activeFilterEpicId={activeEpicFilter}
-              />
+	                data={data} 
+	                onTaskClick={t => { setEditingTask(t); setTaskModalOpen(true); }} 
+	                onAddTask={() => { setEditingTask(null); setTaskModalOpen(true); }}
+	                onStatusChange={actions.tasks.toggleStatus}
+	                onMoveTask={actions.tasks.move}
+	                onAddEpic={() => openEpicModal()}
+	                onEditEpic={(epic) => openEpicModal(epic)}
+	                onEpicFilterChange={(epicId) => {
+	                    setActiveEpicFilter(epicId);
+	                    TWA.selection();
+	                }}
+	                activeFilterEpicId={activeEpicFilter}
+	              />
           )}
           {activeTab === 'SHOP' && (
               <ShoppingScreen
@@ -248,10 +377,11 @@ const App = () => {
            <BudgetEditor budgets={data.budgets} onSave={handleBudgetSave} />
        </Modal>
 
-       <Modal isOpen={isEpicModalOpen} onClose={() => setEpicModalOpen(false)} title="Новая Цель (Эпик)">
+       <Modal isOpen={isEpicModalOpen} onClose={() => setEpicModalOpen(false)} title={initialEpicData?.id ? 'Редактировать проект' : 'Новый проект'}>
            <EpicEditor 
-              key={initialEpicData ? 'with-data' : 'new-epic'}
+              key={initialEpicData?.id || (initialEpicData ? 'with-data' : 'new-epic')}
               onSave={handleEpicSave} 
+              onDelete={handleEpicDelete}
               members={data.members} 
               goals={data.goals.filter(g => isVisible(g, data.currentUser))}
               initialData={initialEpicData}
@@ -261,11 +391,31 @@ const App = () => {
        <Modal isOpen={isSettingsOpen} onClose={() => setSettingsOpen(false)} title="Настройки">
             <SettingsModal
                data={data}
-               onReset={actions.app.resetData}
             />
        </Modal>
+
+       <NotesSheet
+          isOpen={notesSheet.open}
+          initialMode={notesSheet.initialMode}
+          requestId={notesSheet.requestId}
+          data={data}
+          onClose={() => setNotesSheet(prev => ({ ...prev, open: false }))}
+          onSave={actions.notes.save}
+          onDelete={actions.notes.delete}
+       />
     </div>
   );
+};
+
+const App = () => {
+  useTelegramShell();
+  const [inviteToken, setInviteToken] = useState(readInviteToken);
+
+  if (inviteToken) {
+      return <InviteOnboardingScreen token={inviteToken} onAccepted={() => setInviteToken(null)} />;
+  }
+
+  return <FamTrackApp />;
 };
 
 const root = createRoot(document.getElementById('root')!);

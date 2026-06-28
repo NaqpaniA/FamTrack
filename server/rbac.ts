@@ -1,5 +1,6 @@
 import type { AppData } from '../types.js';
 import type { User } from '../family.model.js';
+import type { Note } from '../notes.model.js';
 
 export class ForbiddenError extends Error {
     status = 403;
@@ -7,6 +8,11 @@ export class ForbiddenError extends Error {
 
 export const isOwner = (actor: User) => actor.role === 'OWNER';
 export const isAdmin = (actor: User) => actor.role === 'ADMIN' || actor.role === 'OWNER';
+
+export const canSeeNote = (note: Note, actor: User) => {
+    if (note.scope === 'PERSONAL') return note.createdById === actor.id;
+    return true;
+};
 
 export const canSee = (
     item: { createdById?: string; assigneeId?: string; visibleTo?: string[] },
@@ -28,7 +34,8 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
             ...data,
             currentUser: actor,
             members: activeMembers,
-            archivedMembers
+            archivedMembers,
+            notes: (data.notes || []).filter(note => canSeeNote(note, actor))
         };
     }
 
@@ -54,12 +61,24 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
         subscriptions: data.subscriptions.filter(item => accountIds.has(item.accountId) || actor.role === 'ADMIN'),
         transactions: data.transactions.filter(item => item.createdById === actor.id || accountIds.has(item.accountId)),
         inventory: data.inventory.filter(item => item.ownerId === actor.id),
+        notes: (data.notes || []).filter(note => canSeeNote(note, actor)),
         events: data.events.filter(item => item.actorId === actor.id || actor.role === 'ADMIN'),
         rewardLogs: data.rewardLogs.filter(item => item.userId === actor.id || actor.role === 'ADMIN')
     };
 };
 
 export const assertCanWrite = (actor: User, pathname: string, body: Record<string, unknown>, data: AppData) => {
+    if (pathname === '/api/notes/save') {
+        const note = body.note as Partial<Note> | undefined;
+        if (note && canWriteNote(actor, note, data)) return;
+        throw new ForbiddenError('You are not allowed to change this note');
+    }
+    if (pathname === '/api/notes/delete') {
+        const note = (data.notes || []).find(item => item.id === body.id);
+        if (note && canDeleteNote(actor, note)) return;
+        throw new ForbiddenError('You are not allowed to delete this note');
+    }
+
     if (isOwner(actor)) return;
 
     switch (pathname) {
@@ -68,12 +87,23 @@ export const assertCanWrite = (actor: User, pathname: string, body: Record<strin
             if (task && (isAdmin(actor) || task.createdById === actor.id || task.assigneeId === actor.id)) return;
             break;
         }
+        case '/api/tasks/reorder': {
+            if (isAdmin(actor)) return;
+            const updates = Array.isArray(body.tasks) ? body.tasks : [];
+            if (updates.length > 0 && updates.every(update => {
+                if (!update || typeof update !== 'object' || typeof (update as { id?: unknown }).id !== 'string') return false;
+                const task = data.tasks.find(item => item.id === (update as { id: string }).id);
+                return !!task && canSee(task, actor) && (task.createdById === actor.id || task.assigneeId === actor.id);
+            })) return;
+            break;
+        }
         case '/api/tasks/delete': {
             const task = data.tasks.find(item => item.id === body.id);
             if (task && (isAdmin(actor) || task.createdById === actor.id)) return;
             break;
         }
         case '/api/epics/save':
+        case '/api/epics/delete':
         case '/api/accounts/save':
         case '/api/goals/save':
         case '/api/budgets/save':
@@ -100,8 +130,34 @@ export const assertCanWrite = (actor: User, pathname: string, body: Record<strin
     throw new ForbiddenError('You are not allowed to perform this FamTrack action');
 };
 
+const canWriteNote = (actor: User, incoming: Partial<Note>, data: AppData) => {
+    const previous = (data.notes || []).find(note => note.id === incoming.id);
+    if (!previous) {
+        return !incoming.createdById || incoming.createdById === actor.id;
+    }
+
+    if ((incoming.scope && previous.scope !== incoming.scope)
+        || (incoming.createdById && previous.createdById !== incoming.createdById)) {
+        return false;
+    }
+    if (previous.scope === 'PERSONAL') {
+        return previous.createdById === actor.id;
+    }
+    return previous.createdById === actor.id || isAdmin(actor);
+};
+
+const canDeleteNote = (actor: User, note: Note) => {
+    if (note.scope === 'PERSONAL') return note.createdById === actor.id;
+    return note.createdById === actor.id || isAdmin(actor);
+};
+
 export const sanitizeBatchUpdates = (actor: User, updates: Partial<AppData>, data: AppData): Partial<AppData> => {
-    const { currentUser: _ignoredCurrentUser, archivedMembers: _ignoredArchivedMembers, ...rest } = updates;
+    const {
+        currentUser: _ignoredCurrentUser,
+        archivedMembers: _ignoredArchivedMembers,
+        notes: _ignoredNotes,
+        ...rest
+    } = updates;
     if (isOwner(actor)) return rest;
 
     const adminAllowedKeys = new Set<keyof AppData>([

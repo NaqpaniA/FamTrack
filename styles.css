@@ -4,10 +4,11 @@
 
 :root {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  background-color: var(--tg-theme-bg-color, #f5f6f8);
-  color: var(--tg-theme-text-color, #1f2937);
-  --app-bg: var(--tg-theme-bg-color, #f5f6f8);
-  --app-surface: var(--tg-theme-secondary-bg-color, #ffffff);
+  color-scheme: light;
+  background-color: #f5f6f8;
+  color: #0f172a;
+  --app-bg: #f5f6f8;
+  --app-surface: #ffffff;
   --app-border: rgba(15, 23, 42, 0.08);
   --bottom-nav-height: 64px;
 }
@@ -16,6 +17,7 @@ body {
   margin: 0;
   overscroll-behavior-y: none;
   background: var(--app-bg);
+  color: #0f172a;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -24,6 +26,9 @@ input,
 textarea,
 select {
   font: inherit;
+  color: #0f172a;
+  caret-color: #0f172a;
+  color-scheme: light;
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -42,6 +47,8 @@ select {
 .app-screen {
   min-height: 100svh;
   padding: 14px 14px calc(var(--bottom-nav-height) + 18px + env(safe-area-inset-bottom));
+  background: var(--app-bg);
+  color: #0f172a;
 }
 
 .app-panel {
@@ -49,6 +56,7 @@ select {
   border: 1px solid var(--app-border);
   border-radius: 14px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  color: #0f172a;
 }
 
 .snap-x-app {

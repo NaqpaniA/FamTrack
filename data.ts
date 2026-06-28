@@ -39,7 +39,6 @@ export const INITIAL_DATA: AppData = {
       { id: 'g1', accountId: 'ac3', title: 'Новая Машина', targetAmount: 200000000, currentAmount: 50000000, deadline: '2025-12-31' }
   ],
   savingsGoals: [
-      { id: 'sg1', title: 'Sony PlayStation 5', targetAmount: 6000000, currentAmount: 1500000, status: 'ACTIVE', icon: '🎮', createdById: 'u3', createdAt: Date.now() },
       { id: 'sg2', title: 'Семейный Диснейленд', targetAmount: 50000000, currentAmount: 12000000, status: 'ACTIVE', icon: '🏰', createdById: 'u1', createdAt: Date.now() }
   ],
   contributions: [],
@@ -69,5 +68,6 @@ export const INITIAL_DATA: AppData = {
       { id: 's1', title: 'Молоко', category: 'FOOD', addedById: 'u2', isCompleted: false, createdAt: Date.now() },
       { id: 's2', title: 'Губки для посуды', category: 'HOME', addedById: 'u2', isCompleted: false, createdAt: Date.now() }
   ],
+  notes: [],
   events: []
 };

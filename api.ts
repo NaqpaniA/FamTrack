@@ -1,5 +1,5 @@
-import { AppData, User } from './types';
-import { Task, Epic } from './tasks.model';
+import { AiResult, AppData, FamilyInvite, User } from './types';
+import { Task, Epic, SubTask, TaskStatus } from './tasks.model';
 import {
     Transaction,
     Account,
@@ -12,12 +12,15 @@ import {
 import { RewardLog, InventoryItem } from './family.model';
 import { LocalDatabase, getTelegramInitData } from './utils';
 import { INITIAL_DATA } from './data';
+import { Note } from './notes.model';
 
 export interface ApiInterface {
     loadData(): Promise<AppData>;
     saveTask(task: Task): Promise<Task>;
     deleteTask(id: string): Promise<void>;
+    reorderTasks(tasks: Array<{ id: string; status: TaskStatus; sortOrder: number }>): Promise<void>;
     saveEpic(epic: Epic): Promise<Epic>;
+    deleteEpic(id: string): Promise<void>;
     saveTransaction(tx: Transaction): Promise<Transaction>;
     saveAccount(acc: Account): Promise<Account>;
     saveGoal(goal: FinancialGoal): Promise<FinancialGoal>;
@@ -31,7 +34,13 @@ export interface ApiInterface {
     saveSavingsGoal(goal: SavingsGoal): Promise<SavingsGoal>;
     saveContribution(contribution: GoalContribution): Promise<GoalContribution>;
     saveSubscription(sub: Subscription): Promise<Subscription>;
+    saveNote(note: Note): Promise<Note>;
+    deleteNote(id: string): Promise<void>;
     batchUpdate(updates: Partial<AppData>): Promise<void>;
+    createFamilyInvite(input?: { role?: User['role']; familyName?: string; newFamily?: boolean }): Promise<{ invite: FamilyInvite; url: string }>;
+    acceptFamilyInvite(token: string): Promise<AppData>;
+    breakdownTask(input: { title: string; description?: string }): Promise<AiResult<{ title: string; summary: string; subtasks: SubTask[] }>>;
+    analyzeExpenses(input?: { prompt?: string }): Promise<AiResult<Record<string, unknown>>>;
 }
 
 class ApiError extends Error {
@@ -61,6 +70,7 @@ class LocalAdapter implements ApiInterface {
         if (!data.shoppingList) data.shoppingList = [];
         if (!data.subscriptions) data.subscriptions = [];
         if (!data.events) data.events = [];
+        if (!data.notes) data.notes = [];
         const members = this.allMembers(data).map(member => ({
             ...member,
             isActive: member.id === 'u4' && member.name === 'Дочь' && member.role === 'CHILD' && !member.telegramId
@@ -113,6 +123,18 @@ class LocalAdapter implements ApiInterface {
         });
     }
 
+    async reorderTasks(tasks: Array<{ id: string; status: TaskStatus; sortOrder: number }>): Promise<void> {
+        return this.queue.enqueue(async () => {
+            const data = this.getData();
+            const updates = new Map(tasks.map(task => [task.id, task]));
+            data.tasks = data.tasks.map(task => {
+                const update = updates.get(task.id);
+                return update ? { ...task, status: update.status, sortOrder: update.sortOrder } : task;
+            });
+            this.saveData(data);
+        });
+    }
+
     async saveEpic(epic: Epic): Promise<Epic> {
         return this.queue.enqueue(async () => {
             const data = this.getData();
@@ -121,6 +143,16 @@ class LocalAdapter implements ApiInterface {
             else data.epics.push(epic);
             this.saveData(data);
             return epic;
+        });
+    }
+
+    async deleteEpic(id: string): Promise<void> {
+        return this.queue.enqueue(async () => {
+            const data = this.getData();
+            data.epics = data.epics.filter(epic => epic.id !== id);
+            data.tasks = data.tasks.map(task => task.epicId === id ? { ...task, epicId: undefined } : task);
+            data.goals = data.goals.map(goal => goal.epicId === id ? { ...goal, epicId: undefined } : goal);
+            this.saveData(data);
         });
     }
 
@@ -253,6 +285,25 @@ class LocalAdapter implements ApiInterface {
         });
     }
 
+    async saveNote(note: Note): Promise<Note> {
+        return this.queue.enqueue(async () => {
+            const data = this.getData();
+            const idx = data.notes.findIndex(item => item.id === note.id);
+            if (idx >= 0) data.notes[idx] = note;
+            else data.notes.unshift(note);
+            this.saveData(data);
+            return note;
+        });
+    }
+
+    async deleteNote(id: string): Promise<void> {
+        return this.queue.enqueue(async () => {
+            const data = this.getData();
+            data.notes = data.notes.filter(note => note.id !== id);
+            this.saveData(data);
+        });
+    }
+
     async batchUpdate(updates: Partial<AppData>): Promise<void> {
         return this.queue.enqueue(async () => {
             const current = this.getData();
@@ -268,6 +319,63 @@ class LocalAdapter implements ApiInterface {
             }
             this.saveData(next);
         });
+    }
+
+    async createFamilyInvite(): Promise<{ invite: FamilyInvite; url: string }> {
+        const token = `local-${Date.now()}`;
+        return {
+            invite: {
+                token,
+                familyId: 'local',
+                role: 'CHILD',
+                createdById: this.getData().currentUser.id,
+                createdAt: Date.now()
+            },
+            url: `${window.location.origin}${window.location.pathname}?invite=${token}`
+        };
+    }
+
+    async acceptFamilyInvite(): Promise<AppData> {
+        return this.getData();
+    }
+
+    async breakdownTask(input: { title: string; description?: string }) {
+        const parts = (input.description || '')
+            .split(/[\n.;]+/g)
+            .map(part => part.trim())
+            .filter(Boolean)
+            .slice(0, 8);
+        return {
+            cached: false,
+            model: 'local-fallback',
+            remainingToday: 999,
+            result: {
+                title: input.title,
+                summary: 'Локальная декомпозиция',
+                subtasks: (parts.length ? parts : ['Уточнить результат', 'Сделать основной шаг', 'Проверить']).map(title => ({
+                    id: Math.random().toString(36).slice(2),
+                    title,
+                    isCompleted: false
+                }))
+            }
+        };
+    }
+
+    async analyzeExpenses() {
+        const data = this.getData();
+        const totalExpenses = data.transactions
+            .filter(tx => tx.type === 'EXPENSE')
+            .reduce((sum, tx) => sum + tx.amount, 0);
+        return {
+            cached: false,
+            model: 'local-fallback',
+            remainingToday: 999,
+            result: {
+                totalExpenses,
+                summary: `Расходы в локальном режиме: ${totalExpenses}`,
+                suggestions: ['Настройте серверный API для полного анализа.']
+            }
+        };
     }
 }
 
@@ -308,6 +416,28 @@ class ServerAdapter implements ApiInterface {
         return envelope.data;
     }
 
+    private async requestJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+        const response = await fetch(path, {
+            method: 'POST',
+            headers: {
+                ...this.authHeaders(),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+            let message = `FamTrack API error ${response.status}`;
+            try {
+                const payload = await response.json();
+                if (payload?.error) message = payload.error;
+            } catch {
+                // Keep the generic status message.
+            }
+            throw new ApiError(message, response.status);
+        }
+        return response.json();
+    }
+
     private async write<T>(path: string, body: Record<string, unknown>, value: T): Promise<T> {
         await this.requestEnvelope(path, body);
         return value;
@@ -344,8 +474,16 @@ class ServerAdapter implements ApiInterface {
         await this.requestEnvelope('/api/tasks/delete', { id });
     }
 
+    async reorderTasks(tasks: Array<{ id: string; status: TaskStatus; sortOrder: number }>): Promise<void> {
+        await this.requestEnvelope('/api/tasks/reorder', { tasks });
+    }
+
     async saveEpic(epic: Epic): Promise<Epic> {
         return this.write('/api/epics/save', { epic }, epic);
+    }
+
+    async deleteEpic(id: string): Promise<void> {
+        await this.requestEnvelope('/api/epics/delete', { id });
     }
 
     async saveTransaction(tx: Transaction): Promise<Transaction> {
@@ -400,8 +538,34 @@ class ServerAdapter implements ApiInterface {
         return this.write('/api/subscriptions/save', { subscription: sub }, sub);
     }
 
+    async saveNote(note: Note): Promise<Note> {
+        return this.write('/api/notes/save', { note }, note);
+    }
+
+    async deleteNote(id: string): Promise<void> {
+        await this.requestEnvelope('/api/notes/delete', { id });
+    }
+
     async batchUpdate(updates: Partial<AppData>): Promise<void> {
         await this.requestEnvelope('/api/batch', { updates });
+    }
+
+    async createFamilyInvite(input: { role?: User['role']; familyName?: string; newFamily?: boolean } = {}) {
+        return this.requestJson<{ invite: FamilyInvite; url: string }>('/api/family/invites', input);
+    }
+
+    async acceptFamilyInvite(token: string): Promise<AppData> {
+        const envelope = await this.requestJson<{ revision: number; data: AppData }>('/api/family/invites/accept', { token });
+        this.latestRevision = envelope.revision;
+        return envelope.data;
+    }
+
+    async breakdownTask(input: { title: string; description?: string }) {
+        return this.requestJson<AiResult<{ title: string; summary: string; subtasks: SubTask[] }>>('/api/ai/task-breakdown', input);
+    }
+
+    async analyzeExpenses(input: { prompt?: string } = {}) {
+        return this.requestJson<AiResult<Record<string, unknown>>>('/api/ai/expense-analysis', input);
     }
 }
 

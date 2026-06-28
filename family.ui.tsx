@@ -18,12 +18,14 @@ import {
   Archive,
   RotateCcw,
   Save,
-  ShieldCheck
+  ShieldCheck,
+  Link as LinkIcon
 } from 'lucide-react';
 import { AppData } from './types';
 import { User, Reward, InventoryItem, calculateLevel, getLevelProgress, getNextLevelXp } from './family.model';
 import { Avatar, Modal, Screen, SectionHeader, SegmentedControl } from './ui-kit';
 import { generateId } from './utils';
+import { api } from './api';
 
 // --- Components ---
 
@@ -283,6 +285,9 @@ const FamilyAdminPanel = ({
     onRestoreUser: (id: string) => void
 }) => {
     const [editingUser, setEditingUser] = useState<User | null>(null);
+    const [inviteRole, setInviteRole] = useState<User['role']>('CHILD');
+    const [inviteUrl, setInviteUrl] = useState('');
+    const [isCreatingInvite, setCreatingInvite] = useState(false);
     const archivedMembers = data.archivedMembers || [];
     const activeOwners = data.members.filter(user => user.role === 'OWNER').length;
 
@@ -299,6 +304,20 @@ const FamilyAdminPanel = ({
         }
     };
 
+    const createInvite = async () => {
+        if (isCreatingInvite) return;
+        setCreatingInvite(true);
+        try {
+            const response = await api.createFamilyInvite({ role: inviteRole === 'OWNER' ? 'ADMIN' : inviteRole });
+            setInviteUrl(response.url);
+            await navigator.clipboard?.writeText(response.url);
+        } catch (error) {
+            alert(error instanceof Error ? error.message : 'Не удалось создать приглашение');
+        } finally {
+            setCreatingInvite(false);
+        }
+    };
+
     return (
         <div className="space-y-5 animate-in fade-in slide-in-from-right-4 duration-300">
             <div className="flex items-center justify-between gap-3">
@@ -306,13 +325,51 @@ const FamilyAdminPanel = ({
                     <h2 className="text-[17px] font-bold leading-tight">Состав семьи</h2>
                     <p className="text-xs text-gray-400">Активные профили и Telegram-привязки</p>
                 </div>
-                <button
-                    onClick={() => setEditingUser(createBlankUser())}
-                    className="h-10 px-3 rounded-xl bg-black text-white text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform"
-                >
-                    <UserPlus size={16} />
-                    Добавить
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={createInvite}
+                        disabled={isCreatingInvite}
+                        className="h-10 px-3 rounded-xl bg-blue-50 text-blue-700 text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform disabled:opacity-50"
+                    >
+                        <LinkIcon size={16} />
+                        Инвайт
+                    </button>
+                    <button
+                        onClick={() => setEditingUser(createBlankUser())}
+                        className="h-10 px-3 rounded-xl bg-black text-white text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform"
+                    >
+                        <UserPlus size={16} />
+                        Добавить
+                    </button>
+                </div>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-[14px] p-3 shadow-sm space-y-2">
+                <div className="flex gap-2">
+                    <select
+                        value={inviteRole}
+                        onChange={event => setInviteRole(event.target.value as User['role'])}
+                        className="h-10 rounded-xl bg-gray-50 border border-gray-100 px-3 text-xs font-bold outline-none"
+                    >
+                        <option value="CHILD">Ребёнок</option>
+                        <option value="ADMIN">Админ</option>
+                    </select>
+                    <button
+                        onClick={createInvite}
+                        disabled={isCreatingInvite}
+                        className="flex-1 h-10 rounded-xl bg-black text-white text-xs font-bold disabled:opacity-50"
+                    >
+                        {isCreatingInvite ? 'Создаю...' : 'Создать ссылку'}
+                    </button>
+                </div>
+                {inviteUrl && (
+                    <button
+                        onClick={() => navigator.clipboard?.writeText(inviteUrl)}
+                        className="w-full text-left text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded-xl p-3 break-all"
+                    >
+                        {inviteUrl}
+                    </button>
+                )}
             </div>
 
             <div className="space-y-2">

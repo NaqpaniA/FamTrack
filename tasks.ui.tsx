@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   CheckCircle2, 
   Circle, 
@@ -13,15 +13,18 @@ import {
   Repeat,
   Trash2,
   Plus,
+  Pencil,
   X as XIcon,
   List as ListIcon,
-  Kanban
+  Kanban,
+  Sparkles
 } from 'lucide-react';
 import { Task, Epic, SubTask, Priority, TaskStatus, PRIORITIES, isOverdue, isToday } from './tasks.model';
 import { User, AppData } from './types'; // AppData needed for Screen props
 import { Avatar, FloatingActionButton, Panel, Screen, SegmentedControl, VisibilitySelector } from './ui-kit';
 import { formatMoney, isVisible } from './utils'; // Generic utils
 import { FinancialGoal } from './finance.model';
+import { api } from './api';
 
 // --- Components ---
 
@@ -99,24 +102,51 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
   );
 };
 
-export const KanbanCard: React.FC<{ key?: React.Key, task: Task, assignee?: User, epic?: Epic, onClick: () => void }> = ({ task, assignee, epic, onClick }) => {
+export const KanbanCard: React.FC<{
+    key?: React.Key,
+    task: Task,
+    assignee?: User,
+    epic?: Epic,
+    onClick: () => void,
+    onPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void,
+    onPointerMove?: (event: React.PointerEvent<HTMLDivElement>) => void,
+    onPointerUp?: (event: React.PointerEvent<HTMLDivElement>) => void,
+    onPointerCancel?: (event: React.PointerEvent<HTMLDivElement>) => void,
+    isDragging?: boolean
+}> = ({ task, assignee, epic, onClick, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, isDragging }) => {
     const priorityConfig = PRIORITIES[task.priority];
     const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
 
     return (
-        <div onClick={onClick} className="bg-white p-3 rounded-[12px] shadow-sm border border-gray-100 mb-2 active:scale-95 transition-transform">
-            <div className="flex justify-between items-start mb-2">
-                <div className="flex items-center gap-1">
+        <div
+            data-kanban-task={task.id}
+            role="button"
+            tabIndex={0}
+            onClick={onClick}
+            onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onClick();
+                }
+            }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            className={`touch-none select-none bg-white p-2.5 rounded-[12px] shadow-sm border mb-2 active:scale-95 transition-transform ${isDragging ? 'opacity-60 border-blue-300 ring-2 ring-blue-100' : 'border-gray-100'}`}
+        >
+            <div className="flex justify-between items-start gap-2 mb-2">
+                <div className="flex items-center gap-1 min-w-0">
                     {epic ? (
-                        <span className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded uppercase">
+                        <span className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded uppercase truncate max-w-full">
                             {epic.title}
                         </span>
                     ) : <span></span>}
                     {task.isRecurring && <Clock size={10} className="text-blue-400" />}
                 </div>
-                <div className={`w-2 h-2 rounded-full ${priorityConfig.iconColor.replace('text', 'bg')}`} />
+                <div className={`w-2 h-2 rounded-full shrink-0 ${priorityConfig.iconColor.replace('text', 'bg')}`} />
             </div>
-            <div className="font-medium text-sm text-gray-800 mb-2 line-clamp-2">{task.title}</div>
+            <div className="font-medium text-[13px] leading-snug text-gray-800 mb-2 line-clamp-3 break-words">{task.title}</div>
             
             {task.dueDate && (
                  <div className={`text-[10px] mb-2 flex items-center gap-1 ${overdue ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
@@ -150,6 +180,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   const [subtasks, setSubtasks] = useState<SubTask[]>(task?.subtasks || []);
   const [newSubtask, setNewSubtask] = useState('');
   const [visibleTo, setVisibleTo] = useState<string[]>(task?.visibleTo || []);
+  const [isBreakingDown, setBreakingDown] = useState(false);
 
   const handleAddSubtask = () => {
     if (!newSubtask.trim()) return;
@@ -171,11 +202,29 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       status: task?.status || 'TODO',
       subtasks,
       createdAt: task?.createdAt || Date.now(),
+      sortOrder: task?.sortOrder,
       dueDate,
       isRecurring,
       frequency: isRecurring ? frequency : undefined,
       visibleTo
     });
+  };
+
+  const handleBreakdown = async () => {
+    if (!title.trim() || isBreakingDown) return;
+    setBreakingDown(true);
+    try {
+        const response = await api.breakdownTask({ title, description });
+        const existingTitles = new Set(subtasks.map(item => item.title.trim().toLowerCase()));
+        const next = response.result.subtasks
+            .filter(item => !existingTitles.has(item.title.trim().toLowerCase()))
+            .map(item => ({ ...item, id: item.id || Math.random().toString(36).slice(2) }));
+        setSubtasks([...subtasks, ...next]);
+    } catch (error) {
+        alert(error instanceof Error ? error.message : 'Не удалось разбить задачу');
+    } finally {
+        setBreakingDown(false);
+    }
   };
 
   return (
@@ -287,7 +336,17 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
            </div>
 
            <div>
-               <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Подзадачи</label>
+               <div className="flex items-center justify-between gap-2 mb-1">
+                   <label className="text-xs font-bold text-gray-400 uppercase block">Подзадачи</label>
+                   <button
+                        onClick={handleBreakdown}
+                        disabled={!title.trim() || isBreakingDown}
+                        className="h-8 px-2.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-bold flex items-center gap-1 disabled:opacity-50"
+                   >
+                       <Sparkles size={13} />
+                       {isBreakingDown ? 'Думаю' : 'Разбить'}
+                   </button>
+               </div>
                <div className="space-y-2 mb-2">
                    {subtasks.map((st, idx) => (
                        <div key={st.id} className="flex items-center gap-2 group">
@@ -345,7 +404,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   );
 };
 
-export const EpicEditor = ({ onSave, members, goals = [], initialData }: { key?: React.Key, onSave: (epic: Epic) => void, members: User[], goals?: FinancialGoal[], initialData?: Partial<Epic> }) => {
+export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData }: { key?: React.Key, onSave: (epic: Epic) => void, onDelete?: (id: string) => void, members: User[], goals?: FinancialGoal[], initialData?: Partial<Epic> }) => {
     const [title, setTitle] = useState(initialData?.title || '');
     const [priority, setPriority] = useState<Priority>(initialData?.priority || 'MEDIUM');
     const [color, setColor] = useState(initialData?.color || 'bg-blue-500');
@@ -405,21 +464,35 @@ export const EpicEditor = ({ onSave, members, goals = [], initialData }: { key?:
 
             <VisibilitySelector members={members} selectedIds={visibleTo} onChange={setVisibleTo} />
 
-            <button 
-                onClick={() => onSave({
-                    id: Math.random().toString(36).substr(2,9),
-                    title,
-                    priority,
-                    color,
-                    goalId: goalId || undefined,
-                    isCompleted: false,
-                    visibleTo
-                })}
-                disabled={!title}
-                className="w-full bg-black text-white rounded-xl py-3 font-bold disabled:opacity-50"
-            >
-                Создать Эпик
-            </button>
+            <div className="pt-2 space-y-2">
+                {initialData?.id && onDelete && (
+                    <button
+                        onClick={() => onDelete(initialData.id!)}
+                        className="w-full h-12 rounded-xl bg-red-50 text-red-600 font-bold text-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+                        aria-label="Удалить проект"
+                        title="Удалить проект"
+                    >
+                        <Trash2 size={18} />
+                        Удалить проект
+                    </button>
+                )}
+                <button 
+                    onClick={() => onSave({
+                        id: initialData?.id || Math.random().toString(36).substr(2,9),
+                        title,
+                        priority,
+                        color,
+                        goalId: goalId || undefined,
+                        isCompleted: initialData?.isCompleted || false,
+                        createdById: initialData?.createdById,
+                        visibleTo
+                    })}
+                    disabled={!title}
+                    className="w-full bg-black text-white rounded-xl py-3 font-bold disabled:opacity-50"
+                >
+                    {initialData?.id ? 'Сохранить' : 'Создать проект'}
+                </button>
+            </div>
         </div>
     )
 }
@@ -431,38 +504,166 @@ export const TasksScreen = ({
     onTaskClick, 
     onAddTask,
     onStatusChange,
+    onMoveTask,
+    onAddEpic,
+    onEditEpic,
+    onEpicFilterChange,
     activeFilterEpicId
 }: { 
     data: AppData, 
     onTaskClick: (t: Task) => void,
     onAddTask: () => void,
     onStatusChange: (id: string, status: TaskStatus) => void,
+    onMoveTask: (id: string, status: TaskStatus, beforeTaskId?: string) => void,
+    onAddEpic: () => void,
+    onEditEpic: (epic: Epic) => void,
+    onEpicFilterChange: (epicId?: string) => void,
     activeFilterEpicId?: string
 }) => {
-    const [view, setView] = useState<'LIST' | 'KANBAN'>('LIST');
+    const [view, setView] = useState<'LIST' | 'KANBAN'>('KANBAN');
+    const [draggingId, setDraggingId] = useState<string | null>(null);
+    const dragStart = useRef<{ id: string; x: number; y: number; moved: boolean } | null>(null);
+    const suppressClick = useRef(false);
     
-    let tasks = data.tasks.filter(t => isVisible(t, data.currentUser));
+    const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser));
+    const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser));
+    let tasks = visibleTasks;
     if (activeFilterEpicId) {
         tasks = tasks.filter(t => t.epicId === activeFilterEpicId);
     }
 
-    const activeEpic = activeFilterEpicId ? data.epics.find(e => e.id === activeFilterEpicId) : null;
+    const activeEpic = activeFilterEpicId ? visibleEpics.find(e => e.id === activeFilterEpicId) : null;
+    const orderedTasks = (status: TaskStatus) => tasks
+        .filter(t => t.status === status)
+        .sort((left, right) => (left.sortOrder ?? left.createdAt) - (right.sortOrder ?? right.createdAt));
+
+    const beginDrag = (event: React.PointerEvent<HTMLDivElement>, id: string) => {
+        dragStart.current = { id, x: event.clientX, y: event.clientY, moved: false };
+        try {
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+        } catch {
+            // Some synthetic/WebView pointer events are not capturable.
+        }
+    };
+
+    const updateDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!dragStart.current) return;
+        const distance = Math.hypot(event.clientX - dragStart.current.x, event.clientY - dragStart.current.y);
+        if (distance > 8) {
+            dragStart.current.moved = true;
+            setDraggingId(dragStart.current.id);
+        }
+    };
+
+    const finishDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+        const state = dragStart.current;
+        dragStart.current = null;
+        setDraggingId(null);
+        try {
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+        } catch {
+            // Pointer capture may be absent if the WebView did not grant it.
+        }
+        if (!state?.moved) return;
+
+        suppressClick.current = true;
+        window.setTimeout(() => {
+            suppressClick.current = false;
+        }, 0);
+
+        const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+        const column = target?.closest('[data-kanban-column]') as HTMLElement | null;
+        const targetStatus = column?.dataset.kanbanColumn as TaskStatus | undefined;
+        if (!targetStatus) return;
+        const targetCard = target?.closest('[data-kanban-task]') as HTMLElement | null;
+        const beforeTaskId = targetCard?.dataset.kanbanTask;
+        onMoveTask(state.id, targetStatus, beforeTaskId && beforeTaskId !== state.id ? beforeTaskId : undefined);
+    };
+
+    const cancelDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+        dragStart.current = null;
+        setDraggingId(null);
+        try {
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+        } catch {
+            // Pointer capture may be absent if the drag was cancelled early.
+        }
+    };
 
     return (
         <Screen className="flex flex-col">
-            <div className="flex items-center justify-between gap-3">
-                <div>
-                    <h1 className="text-[24px] leading-tight font-bold">{activeEpic ? activeEpic.title : 'Задачи'}</h1>
-                    <p className="text-gray-500 text-[13px]">{tasks.length} всего</p>
+            <div className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <h1 className="text-[24px] leading-tight font-bold truncate">{activeEpic ? activeEpic.title : 'Задачи'}</h1>
+                        <p className="text-gray-500 text-[13px]">{tasks.length} всего</p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        <SegmentedControl
+                            value={view}
+                            onChange={setView}
+                            options={[
+                                { value: 'LIST', icon: ListIcon },
+                                { value: 'KANBAN', icon: Kanban }
+                            ]}
+                        />
+                    </div>
                 </div>
-                <SegmentedControl
-                    value={view}
-                    onChange={setView}
-                    options={[
-                        { value: 'LIST', icon: ListIcon },
-                        { value: 'KANBAN', icon: Kanban }
-                    ]}
-                />
+
+                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1" role="tablist" aria-label="Проекты">
+                    <button
+                        type="button"
+                        onClick={() => onEpicFilterChange(undefined)}
+                        className={`h-9 shrink-0 rounded-full border px-3 text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform ${!activeFilterEpicId ? 'bg-black text-white border-black shadow-sm' : 'bg-white text-gray-600 border-gray-200'}`}
+                        aria-pressed={!activeFilterEpicId}
+                    >
+                        Все
+                        <span className={`min-w-5 h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] ${!activeFilterEpicId ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                            {visibleTasks.length}
+                        </span>
+                    </button>
+                    {visibleEpics.map(epic => {
+                        const isActive = activeFilterEpicId === epic.id;
+                        const count = visibleTasks.filter(task => task.epicId === epic.id).length;
+                        return (
+                            <button
+                                key={epic.id}
+                                type="button"
+                                onClick={() => onEpicFilterChange(epic.id)}
+                                className={`h-9 max-w-[220px] shrink-0 rounded-full border pl-2.5 pr-2 text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform ${isActive ? 'bg-gray-950 text-white border-gray-950 shadow-sm' : 'bg-white text-gray-700 border-gray-200'}`}
+                                aria-pressed={isActive}
+                            >
+                                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${epic.color}`} />
+                                <span className="truncate">{epic.title}</span>
+                                <span className={`min-w-5 h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] ${isActive ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                                    {count}
+                                </span>
+                            </button>
+                        );
+                    })}
+                    {activeEpic && (
+                        <button
+                            type="button"
+                            onClick={() => onEditEpic(activeEpic)}
+                            className="h-9 shrink-0 rounded-full bg-gray-50 border border-gray-200 text-gray-700 px-3 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                            aria-label="Редактировать проект"
+                            title="Редактировать проект"
+                        >
+                            <Pencil size={15} />
+                            <span className="text-xs font-bold">Править</span>
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={onAddEpic}
+                        className="h-9 shrink-0 rounded-full bg-blue-50 text-blue-600 border border-blue-100 px-3 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                        aria-label="Создать проект"
+                        title="Создать проект"
+                    >
+                        <Plus size={15} />
+                        <span className="text-xs font-bold">Проект</span>
+                    </button>
+                </div>
             </div>
 
             <div className="flex-1">
@@ -473,7 +674,7 @@ export const TasksScreen = ({
                                 <p>Нет задач</p>
                             </div>
                         ) : (
-                            tasks.sort((a,b) => (b.dueDate ? 1 : 0) - (a.dueDate ? 1 : 0)).map(task => (
+                            [...tasks].sort((a,b) => (b.dueDate ? 1 : 0) - (a.dueDate ? 1 : 0)).map(task => (
                                 <div key={task.id} className="px-3">
                                     <TaskItem 
                                         task={task}
@@ -487,21 +688,32 @@ export const TasksScreen = ({
                         )}
                     </Panel>
                 ) : (
-                    <div className="flex gap-3 overflow-x-auto pb-4 h-full no-scrollbar snap-x-app mt-4 -mx-1 px-1">
+                    <div className="flex gap-2 overflow-x-auto pb-4 h-full no-scrollbar snap-x-app mt-4 -mx-1 px-1">
                         {(['TODO', 'IN_PROGRESS', 'DONE'] as TaskStatus[]).map(status => (
-                            <div key={status} className="min-w-[calc(100vw-28px)] max-w-[calc(100vw-28px)] sm:min-w-[280px] sm:max-w-[320px] flex-1 bg-gray-50 rounded-[14px] border border-gray-100 p-3 snap-start">
-                                <div className="flex items-center gap-2 mb-3 text-xs font-bold text-gray-500 uppercase tracking-wider">
-                                    <div className={`w-2 h-2 rounded-full ${status === 'TODO' ? 'bg-gray-400' : status === 'IN_PROGRESS' ? 'bg-blue-500' : 'bg-green-500'}`} />
+                            <div
+                                key={status}
+                                data-kanban-column={status}
+                                className="min-w-[calc((100vw-36px)/2)] max-w-[calc((100vw-36px)/2)] sm:min-w-[220px] sm:max-w-[240px] shrink-0 bg-gray-50 rounded-[14px] border border-gray-100 p-2 snap-start"
+                            >
+                                <div className="flex items-center gap-1.5 mb-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider truncate">
+                                    <div className={`w-2 h-2 rounded-full shrink-0 ${status === 'TODO' ? 'bg-gray-400' : status === 'IN_PROGRESS' ? 'bg-blue-500' : 'bg-green-500'}`} />
                                     {status === 'TODO' ? 'Надо сделать' : status === 'IN_PROGRESS' ? 'В процессе' : 'Готово'}
                                 </div>
                                 <div className="space-y-2">
-                                    {tasks.filter(t => t.status === status).map(task => (
+                                    {orderedTasks(status).map(task => (
                                         <KanbanCard 
                                             key={task.id}
                                             task={task}
                                             assignee={data.members.find(m => m.id === task.assigneeId)}
                                             epic={data.epics.find(e => e.id === task.epicId)}
-                                            onClick={() => onTaskClick(task)}
+                                            isDragging={draggingId === task.id}
+                                            onPointerDown={(event) => beginDrag(event, task.id)}
+                                            onPointerMove={updateDrag}
+                                            onPointerUp={finishDrag}
+                                            onPointerCancel={cancelDrag}
+                                            onClick={() => {
+                                                if (!suppressClick.current) onTaskClick(task);
+                                            }}
                                         />
                                     ))}
                                 </div>

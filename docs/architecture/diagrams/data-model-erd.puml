@@ -1,0 +1,345 @@
+@startuml
+title
+FamTrack - полная ERD persisted-модели
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+hide circle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam defaultFontName "DejaVu Sans"
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #334155
+  ArrowColor #475569
+}
+
+entity "schema_migrations\nглобальная история миграций" as schema_migrations {
+  * version : TEXT
+  --
+  applied_at : INTEGER
+}
+
+entity "app_state\nlegacy/global state" as app_state {
+  * key : TEXT
+  --
+  value : TEXT
+}
+
+entity "families\ntenant root" as families {
+  * id : TEXT
+  --
+  name : TEXT
+  owner_user_id : TEXT
+  revision : INTEGER
+  created_at : INTEGER
+}
+
+entity "family_invites\nсемейные invite tokens" as family_invites {
+  * token : TEXT
+  --
+  family_id : TEXT
+  family_name : TEXT
+  role : TEXT
+  created_by_id : TEXT
+  created_at : INTEGER
+  expires_at : INTEGER
+  used_at : INTEGER
+}
+
+entity "users\nучастники семьи" as users {
+  * id : TEXT
+  --
+  family_id : TEXT
+  name : TEXT
+  role : TEXT
+  avatar : TEXT
+  xp : INTEGER
+  level : INTEGER
+  is_active : INTEGER
+  telegram_id : INTEGER
+  telegram_username : TEXT
+  streak : INTEGER
+  last_login_date : TEXT
+}
+
+entity "epics\nпроекты" as epics {
+  * id : TEXT
+  --
+  family_id : TEXT
+  title : TEXT
+  priority : TEXT
+  color : TEXT
+  is_completed : INTEGER
+  goal_id : TEXT
+  created_by_id : TEXT
+  visible_to_json : TEXT
+}
+
+entity "tasks\nзадачи" as tasks {
+  * id : TEXT
+  --
+  family_id : TEXT
+  title : TEXT
+  description : TEXT
+  status : TEXT
+  priority : TEXT
+  points : INTEGER
+  assignee_id : TEXT
+  created_by_id : TEXT
+  epic_id : TEXT
+  subtasks_json : TEXT
+  created_at : INTEGER
+  sort_order : INTEGER
+  due_date : TEXT
+  reminder_time : TEXT
+  visible_to_json : TEXT
+  is_recurring : INTEGER
+  frequency : TEXT
+}
+
+entity "accounts\nсчета" as accounts {
+  * id : TEXT
+  --
+  family_id : TEXT
+  name : TEXT
+  balance : INTEGER
+  type : TEXT
+  goal_id : TEXT
+  created_by_id : TEXT
+  visible_to_json : TEXT
+}
+
+entity "financial_goals\nlegacy account-bound цели" as financial_goals {
+  * id : TEXT
+  --
+  family_id : TEXT
+  account_id : TEXT
+  title : TEXT
+  target_amount : INTEGER
+  current_amount : INTEGER
+  deadline : TEXT
+  epic_id : TEXT
+  created_by_id : TEXT
+  visible_to_json : TEXT
+}
+
+entity "savings_goals\nкопилки" as savings_goals {
+  * id : TEXT
+  --
+  family_id : TEXT
+  title : TEXT
+  description : TEXT
+  target_amount : INTEGER
+  current_amount : INTEGER
+  status : TEXT
+  icon : TEXT
+  created_by_id : TEXT
+  created_at : INTEGER
+}
+
+entity "goal_contributions\nвзносы в копилки" as goal_contributions {
+  * id : TEXT
+  --
+  family_id : TEXT
+  goal_id : TEXT
+  user_id : TEXT
+  amount : INTEGER
+  message : TEXT
+  date : INTEGER
+}
+
+entity "subscriptions\nрегулярные платежи" as subscriptions {
+  * id : TEXT
+  --
+  family_id : TEXT
+  title : TEXT
+  amount : INTEGER
+  currency : TEXT
+  service_id : TEXT
+  frequency : TEXT
+  next_payment_date : TEXT
+  is_auto_pay : INTEGER
+  account_id : TEXT
+  category_id : TEXT
+  active : INTEGER
+}
+
+entity "budgets\nлимиты категорий" as budgets {
+  * family_id : TEXT
+  * category_id : TEXT
+  --
+  limit_amount : INTEGER
+}
+
+entity "transactions\nфинансовый ledger" as transactions {
+  * id : TEXT
+  --
+  family_id : TEXT
+  amount : INTEGER
+  title : TEXT
+  type : TEXT
+  category_id : TEXT
+  account_id : TEXT
+  to_account_id : TEXT
+  date : TEXT
+  created_by_id : TEXT
+  deviation_reason : TEXT
+}
+
+entity "rewards\nкаталог наград" as rewards {
+  * id : TEXT
+  --
+  family_id : TEXT
+  title : TEXT
+  cost : INTEGER
+  icon : TEXT
+  description : TEXT
+}
+
+entity "reward_logs\nжурнал XP" as reward_logs {
+  * id : TEXT
+  --
+  family_id : TEXT
+  user_id : TEXT
+  action : TEXT
+  amount : INTEGER
+  description : TEXT
+  timestamp : INTEGER
+}
+
+entity "inventory\nкупленные награды" as inventory {
+  * id : TEXT
+  --
+  family_id : TEXT
+  reward_id : TEXT
+  owner_id : TEXT
+  status : TEXT
+  purchased_at : INTEGER
+  used_at : INTEGER
+}
+
+entity "shopping_items\nсписок покупок" as shopping_items {
+  * id : TEXT
+  --
+  family_id : TEXT
+  title : TEXT
+  category : TEXT
+  added_by_id : TEXT
+  is_completed : INTEGER
+  created_at : INTEGER
+}
+
+entity "events\nactivity feed" as events {
+  * id : TEXT
+  --
+  family_id : TEXT
+  type : TEXT
+  actor_id : TEXT
+  payload_json : TEXT
+  timestamp : INTEGER
+}
+
+entity "notes\nзаметки" as notes {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  scope : TEXT
+  content_type : TEXT
+  title : TEXT
+  body : TEXT
+  checklist_items_json : TEXT
+  created_by_id : TEXT
+  updated_by_id : TEXT
+  is_pinned : INTEGER
+  is_archived : INTEGER
+  created_at : INTEGER
+  updated_at : INTEGER
+}
+
+entity "ai_usage\nучёт AI helpers" as ai_usage {
+  * id : TEXT
+  --
+  family_id : TEXT
+  actor_id : TEXT
+  helper_type : TEXT
+  input_hash : TEXT
+  model : TEXT
+  input_chars : INTEGER
+  output_tokens : INTEGER
+  estimated_cost : INTEGER
+  cached : INTEGER
+  response_json : TEXT
+  created_at : INTEGER
+}
+
+families ||--o{ users : family_id
+families ||--o{ family_invites : family_id
+families ||--o{ epics : family_id
+families ||--o{ tasks : family_id
+families ||--o{ accounts : family_id
+families ||--o{ financial_goals : family_id
+families ||--o{ savings_goals : family_id
+families ||--o{ goal_contributions : family_id
+families ||--o{ subscriptions : family_id
+families ||--o{ budgets : family_id
+families ||--o{ transactions : family_id
+families ||--o{ rewards : family_id
+families ||--o{ reward_logs : family_id
+families ||--o{ inventory : family_id
+families ||--o{ shopping_items : family_id
+families ||--o{ events : family_id
+families ||--o{ notes : family_id
+families ||--o{ ai_usage : family_id
+
+families }o..|| users : owner_user_id
+family_invites }o..|| users : created_by_id
+epics }o..|| users : created_by_id
+tasks }o..|| users : assignee_id
+tasks }o..|| users : created_by_id
+tasks }o..|| epics : epic_id
+accounts }o..|| users : created_by_id
+financial_goals }o..|| accounts : account_id
+financial_goals }o..|| epics : epic_id
+savings_goals }o..|| users : created_by_id
+goal_contributions }o..|| savings_goals : goal_id
+goal_contributions }o..|| users : user_id
+subscriptions }o..|| accounts : account_id
+transactions }o..|| accounts : account_id
+transactions }o..|| accounts : to_account_id
+transactions }o..|| users : created_by_id
+reward_logs }o..|| users : user_id
+inventory }o..|| rewards : reward_id
+inventory }o..|| users : owner_id
+shopping_items }o..|| users : added_by_id
+events }o..|| users : actor_id
+notes }o..|| users : created_by_id
+notes }o..|| users : updated_by_id
+ai_usage }o..|| users : actor_id
+
+note top of families
+revision - optimistic concurrency token.
+Все write-запросы должны учитывать текущую revision.
+end note
+
+note right of budgets
+Composite primary key:
+(family_id, category_id)
+end note
+
+note right of notes
+Composite primary key:
+(family_id, id).
+Personal notes фильтруются по created_by_id.
+end note
+
+legend bottom
+  Сплошные связи от families показывают tenant ownership.
+  Пунктирные связи показывают application-level references.
+  SQLite schema не навязывает все foreign keys физически.
+endlegend
+
+@enduml
+

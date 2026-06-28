@@ -1,0 +1,133 @@
+@startuml
+title
+FamTrack - доменные последовательности
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam sequence {
+  ArrowColor #475569
+  LifeLineBorderColor #64748B
+  LifeLineBackgroundColor #F8FAFC
+  ParticipantBorderColor #334155
+  ParticipantBackgroundColor #F8FAFC
+  ActorBorderColor #B45309
+  ActorBackgroundColor #FEF3C7
+}
+autonumber
+
+actor "Владелец" as Owner
+actor "Участник" as Member
+participant "UI/store.ts" as Store
+participant "HTTP API" as API
+participant "RBAC" as RBAC
+participant "FamTrackDatabase" as DB
+database "SQLite" as SQLite
+participant "AI helper policy" as AI
+
+group Invite: создание и принятие
+  Owner -> Store : Создать invite
+  Store -> API : POST /api/family/invites
+  API -> RBAC : owner/developerOwner check
+  RBAC --> API : allowed
+  API -> DB : createFamilyInvite()
+  DB -> SQLite : INSERT family_invites
+  DB --> API : invite
+  API --> Store : {invite, url}
+
+  Member -> Store : Открыть ссылку invite
+  Store -> API : POST /api/family/invites/accept
+  API -> DB : acceptFamilyInvite(token, auth)
+  DB -> SQLite : SELECT invite
+  alt invite не найден
+    DB --> API : 404 InviteError
+  else used/expired
+    DB --> API : 409/410 InviteError
+  else valid
+    DB -> SQLite : BEGIN IMMEDIATE
+    DB -> SQLite : INSERT user\nили INSERT family + user
+    DB -> SQLite : UPDATE family_invites.used_at
+    DB -> SQLite : COMMIT
+    DB --> API : envelope
+    API --> Store : filtered AppData
+  end
+end
+
+group Завершение задачи
+  Member -> Store : toggleTaskStatus(DONE)
+  Store -> Store : task.status = DONE
+  Store -> Store : assignee.xp += task.points
+  Store -> Store : rewardLog EARNED
+  Store -> Store : event TASK_COMPLETED
+  alt recurring task
+    Store -> Store : создать следующий task instance
+  end
+  Store -> API : POST /api/batch\n{tasks, members, rewardLogs, events}
+  API -> RBAC : sanitizeBatchUpdates()
+  RBAC --> API : allowed
+  API -> DB : mutate()
+  DB -> SQLite : replace tasks/users/reward_logs/events
+  DB --> API : next revision
+  API --> Store : filtered AppData
+end
+
+group Финансовый взнос в копилку
+  Member -> Store : contributeToGoal(goal, amount, account)
+  Store -> Store : UX validation amount > 0
+  Store -> Store : UX validation account.balance >= amount
+  Store -> Store : account.balance -= amount
+  Store -> Store : goal.currentAmount += amount
+  Store -> Store : create contribution
+  Store -> Store : create transaction category goal_contrib
+  Store -> Store : event GOAL_CONTRIBUTION
+  Store -> API : POST /api/batch
+  API -> RBAC : finance write role check
+  RBAC --> API : allowed or 403
+  API -> DB : mutate()
+  DB -> SQLite : replace finance tables and events
+  API --> Store : next envelope
+end
+
+group Заметка
+  Member -> Store : saveNote(note)
+  Store -> API : POST /api/notes/save
+  API -> RBAC : canWriteNote()
+  API -> DB : mutate(saveNote)
+  DB -> DB : normalizeNote()
+  alt новая FAMILY note
+    DB -> SQLite : INSERT notes
+    DB -> SQLite : INSERT NOTE_CREATED event
+  else update
+    DB -> SQLite : UPDATE via replaceFamilyData
+  end
+  DB --> API : next envelope
+  API --> Store : filtered notes
+end
+
+group AI helper
+  Member -> Store : breakdownTask или analyzeExpenses
+  Store -> API : POST /api/ai/...
+  API -> AI : normalize input + hash
+  AI -> DB : getCachedAiUsage()
+  alt cached
+    DB --> AI : response_json
+    AI -> DB : logAiUsage(cached=true)
+    AI --> API : cached result
+  else not cached
+    AI -> DB : countAiUsageSince(startOfUtcDay)
+    alt limit exceeded
+      AI --> API : 429
+    else allowed
+      AI -> AI : build local heuristic result
+      AI -> DB : logAiUsage(cached=false)
+      AI --> API : result
+    end
+  end
+  API --> Store : AiResult
+end
+
+@enduml
+

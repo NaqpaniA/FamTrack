@@ -1,0 +1,112 @@
+@startuml
+title
+FamTrack - activity диаграммы сквозных процессов
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam roundcorner 10
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+
+start
+
+partition "1. Вход и построение read model" {
+  :Открыть Telegram Mini App;
+  :Получить initData;
+  :GET /api/app-data;
+  :Проверить Telegram подпись;
+  if (actor найден?) then (да)
+    :Загрузить family aggregate;
+    :Отфильтровать данные по роли;
+    :Вернуть {revision, data};
+  else (нет)
+    :Вернуть 401/403;
+    stop
+  endif
+}
+
+partition "2. Выбор доменного сценария" {
+  if (задача?) then (task)
+    :Создать/изменить задачу;
+    if (mark DONE?) then (да)
+      :Начислить XP;
+      :Добавить reward log;
+      :Добавить TASK_COMPLETED event;
+      if (recurring?) then (да)
+        :Создать следующую задачу;
+      endif
+    endif
+  elseif (финансы?) then (finance)
+    :Создать transaction\nили обновить account/goal/subscription;
+    if (копилка?) then (да)
+      :Создать contribution;
+      :Создать GOAL_CONTRIBUTION event;
+    endif
+    if (подписка оплачена?) then (да)
+      :Создать transaction;
+      :Перенести nextPaymentDate;
+      :Создать SUBSCRIPTION_PAID event;
+    endif
+  elseif (покупки?) then (shopping)
+    :Добавить или отметить item;
+    if (checkout?) then (да)
+      :Создать expense transaction;
+      :Удалить completed items;
+      :Создать SHOPPING_CHECKOUT event;
+    endif
+  elseif (заметки?) then (notes)
+    :Создать/изменить note;
+    if (new FAMILY note?) then (да)
+      :Создать NOTE_CREATED event;
+    endif
+  else (family/rewards)
+    :Изменить участника, награду или инвентарь;
+    :Создать reward log/event при необходимости;
+  endif
+}
+
+partition "3. Серверная запись" {
+  :POST /api/... с revision;
+  :validateRequestAuth();
+  :resolveActor();
+  if (batch?) then (да)
+    :sanitizeBatchUpdates();
+  else (нет)
+    :assertCanWrite();
+  endif
+  if (write allowed?) then (да)
+    :FamTrackDatabase.mutate();
+    if (revision актуальна?) then (да)
+      :BEGIN IMMEDIATE;
+      :replace family rows;
+      :revision + 1;
+      :COMMIT;
+      :persist DB file;
+    else (нет)
+      :409 conflict;
+      :Клиент refetch;
+      stop
+    endif
+  else (нет)
+    :403 forbidden;
+    stop
+  endif
+}
+
+partition "4. Ответ и наблюдаемость" {
+  :filterForActor(nextData);
+  :Вернуть новый envelope;
+  :React Query invalidation;
+  :Metrics store записывает route count,\nlatency bucket и status class;
+}
+
+stop
+
+@enduml
+

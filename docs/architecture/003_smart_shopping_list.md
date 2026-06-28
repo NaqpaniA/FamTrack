@@ -1,82 +1,69 @@
-# Architectural Design Record (ADR) 003: Smart Shopping List & Finance Integration
+# ADR 003: Умный список покупок и связь с финансами
 
-**Status:** APPROVED
-**Date:** 2024-05-28
-**Author:** Senior Product Architect
-**Target Feature:** Household Management
+**Статус:** ПРИНЯТО
+**Дата исходного решения:** 2024-05-28
+**Дата актуализации:** 2026-06-28
+**Источник актуализации:** `FamTrack@768af344db91`
 
----
+## 1. Проблема
 
-## 1. Context & Problem Statement
+Семьи часто ведут список покупок отдельно от финансового учёта. После похода в
+магазин траты забывают внести в бюджет, из-за чего финансовая картина становится
+неточной.
 
-Families struggle with two disconnected processes:
-1.  **Logistics:** Knowing what to buy (Groceries, Household items).
-2.  **Finance:** Tracking how much was spent on those items.
+## 2. Решение
 
-Currently, users list items in WhatsApp or Notes, buy them, and then *forget* to record the expense in the Finance module. This leads to inaccurate budget tracking.
+FamTrack объединяет список покупок и финансовый ledger через checkout-сценарий:
 
-**Goal:** Create a unified "Shop" tab where users can collaborate on a list and seamlessly convert bought items into financial transactions.
+1. Участники добавляют items в общий список.
+2. Купленные позиции отмечаются как completed.
+3. При checkout пользователь вводит итоговую сумму и выбирает счёт.
+4. Приложение создаёт expense transaction.
+5. Купленные позиции удаляются из active list.
+6. В activity feed создаётся событие `SHOPPING_CHECKOUT`.
 
----
+## 3. Модель данных
 
-## 2. Decision: "Checkout Mode" Workflow
+`shopping_items`:
 
-We will implement a Shopping List that is tightly coupled with the Finance module via a **"Checkout"** workflow.
+- `family_id`
+- `id`
+- `title`
+- `category`
+- `added_by_id`
+- `is_completed`
+- `created_at`
 
-### Core Logic:
-1.  **Collaborative List:** Any family member can add items.
-2.  **Real-time Status:** Items have `PENDING` | `BOUGHT` states.
-3.  **The Checkout Action:**
-    *   User selects items they just put in the cart (checks them off).
-    *   User hits "Complete Shopping".
-    *   App calculates the number of items.
-    *   App prompts: *"Create a transaction for these items?"*
-    *   User enters total amount (e.g., 2500 RUB).
-    *   **Result:** Items are removed from the active list, and a `Transaction` is created in the Finance ledger automatically tagged as 'Groceries' (or user selection).
+Связанные сущности:
 
----
+- `transactions`
+- `accounts`
+- `events`
 
-## 3. Data Architecture
+## 4. Авторизация и видимость
 
-### Schema Updates
+Список покупок является семейным collaborative domain. Child может работать со
+списком, но финансовая часть checkout затрагивает счета и должна оставаться под
+серверными ограничениями batch update.
 
-```typescript
-interface ShoppingItem {
-  id: string;
-  title: string; // e.g., "Milk"
-  category?: 'FOOD' | 'HOME' | 'OTHER'; // Simple taxonomy
-  addedById: string;
-  isCompleted: boolean; // "In the cart" state
-  createdAt: number;
-}
+## 5. UX-поведение
 
-// Add to AppData
-interface AppData {
-  // ... existing fields
-  shoppingList: ShoppingItem[];
-}
-```
+- Быстрое добавление позиции.
+- Категории: еда, дом, другое.
+- Отдельное состояние для активных и отмеченных покупок.
+- Checkout доступен только когда есть отмеченные позиции.
+- После checkout active list содержит только некупленные позиции.
 
----
+## 6. Риски и развитие
 
-## 4. User Experience (UI)
+- Сейчас сумма checkout вводится вручную.
+- Категория транзакции упрощена.
+- Для будущего развития можно добавить шаблоны магазинов, повторяемые товары и
+  разбиение суммы по категориям.
 
-### 4.1. The Input
-*   Fast text entry (Auto-focus after add for rapid fire entry).
-*   Quick category chips (Food, Home).
+## 7. Связанные диаграммы
 
-### 4.2. The List
-*   Grouped by status (To Buy vs. In Cart).
-*   Swipe-to-delete.
+- `diagrams/data-model-erd.puml`
+- `diagrams/sequences-domain-processes.puml`
+- `diagrams/activities-end-to-end.puml`
 
-### 4.3. The "Checkout" Fab
-*   A floating action button that appears only when items are checked (`isCompleted === true`).
-*   Label: "Finish Shopping".
-*   Action: Opens a modal to finalize expense.
-
----
-
-## 5. Implementation Strategy
-
-1.  **State:** Leverage existing `useAppStore` and `batchUpdate` to minimize boilerplate. No new API endpoints needed strictly for items if we treat the list as a JSON document update.
-2.  **Migration:** Ensure `LocalDatabase.load()` initializes an empty `shoppingList` array for existing users.

@@ -1,0 +1,97 @@
+@startuml
+title
+FamTrack - интеграционные последовательности
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam sequence {
+  ArrowColor #475569
+  LifeLineBorderColor #64748B
+  LifeLineBackgroundColor #F8FAFC
+  ParticipantBorderColor #334155
+  ParticipantBackgroundColor #F8FAFC
+  ActorBorderColor #B45309
+  ActorBackgroundColor #FEF3C7
+}
+autonumber
+
+actor "Пользователь Telegram" as TgUser
+actor "Пользователь MCP/tool" as ToolUser
+actor "Сборщик метрик" as MetricsUser
+participant "Telegram Bot API" as Telegram
+participant "Telegram Agent" as Agent
+participant "MCP Bridge" as MCP
+participant "HTTP API" as API
+participant "Auth" as Auth
+participant "RBAC" as RBAC
+participant "FamTrackDatabase" as DB
+participant "Metrics store" as Metrics
+
+group Telegram read command
+  TgUser -> Telegram : /status, /tasks, /finance
+  Telegram -> Agent : getUpdates response
+  Agent -> API : GET /api/app-data\nactor Telegram context
+  API -> Auth : validate identity
+  API -> DB : resolveActor()
+  API -> RBAC : filterForActor()
+  API --> Agent : visible AppData
+  Agent -> Agent : format safe response
+  Agent -> Telegram : sendMessage
+  Telegram --> TgUser : ответ
+end
+
+group Telegram write command
+  TgUser -> Telegram : /task Купить молоко
+  Telegram -> Agent : update
+  Agent -> API : GET /api/app-data
+  API --> Agent : {revision, data}
+  Agent -> Agent : build task\nassignee=actor, createdBy=actor
+  Agent -> API : POST /api/tasks/save\n{revision, task}
+  API -> Auth : validate identity
+  API -> RBAC : assertCanWrite()
+  API -> DB : mutate()
+  DB --> API : next revision
+  API --> Agent : success
+  Agent -> Telegram : sendMessage(created)
+end
+
+group MCP tool read/write
+  ToolUser -> MCP : create_task(telegram_id, title)
+  MCP -> MCP : sign synthetic initData
+  MCP -> API : GET /api/app-data
+  API -> Auth : validate signed initData
+  API -> RBAC : filterForActor()
+  API --> MCP : current revision + actor
+  MCP -> API : POST /api/tasks/save\n{revision, task}
+  API -> RBAC : assertCanWrite()
+  API -> DB : mutate()
+  API --> MCP : next revision
+  MCP --> ToolUser : tool result
+end
+
+group Internal metrics
+  MetricsUser -> API : GET /api/internal/metrics\ninternal secret
+  API -> Auth : validate internal secret
+  API -> Metrics : snapshot()
+  API -> DB : health()
+  DB --> API : revision + family count
+  Metrics --> API : routes, latency buckets, memory
+  API --> MetricsUser : aggregate runtime health
+end
+
+group Static frontend
+  TgUser -> API : GET / или asset path
+  API -> API : safe path normalize
+  alt file exists
+    API --> TgUser : asset with cache headers
+  else SPA fallback
+    API --> TgUser : index.html
+  end
+end
+
+@enduml
+

@@ -1,0 +1,92 @@
+@startuml
+title
+FamTrack - потоки данных и доверенные зоны
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam roundcorner 12
+skinparam defaultFontName "DejaVu Sans"
+skinparam ArrowColor #475569
+skinparam rectangle {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+skinparam database {
+  BackgroundColor #FFF7ED
+  BorderColor #C2410C
+}
+
+actor "Пользователь Telegram" as User
+actor "Оператор MCP/tools" as ToolUser
+actor "Сборщик метрик" as MetricsUser
+
+rectangle "Недоверенная зона клиента" as ClientZone #E0F2FE {
+  rectangle "Telegram WebView\ninitData, themeParams" as WebView
+  rectangle "React UI\nэкраны и формы" as ReactUi
+  rectangle "React Query cache\noptimistic state" as QueryCache
+  rectangle "ServerAdapter\nlatestRevision" as ServerAdapter
+  rectangle "LocalStorage fallback\nтолько dev localhost" as LocalFallback
+}
+
+rectangle "Backend enforcement zone" as BackendZone #EDE9FE {
+  rectangle "HTTP API router" as HttpApi
+  rectangle "AuthN\nTelegram HMAC/internal secret" as Authn
+  rectangle "Actor resolution\nactive user lookup" as ActorResolution
+  rectangle "AuthZ/RBAC\nwrite checks + read filtering" as Authz
+  rectangle "Domain mutation layer\nnormalization + mutator" as DomainLayer
+  rectangle "AI helper policy\ncache + daily limit" as AiPolicy
+  rectangle "Metrics store\nroute groups + latency" as MetricsStore
+}
+
+database "SQLite persistence zone\nfamily-scoped tables" as SQLite
+
+rectangle "Integration zone" as IntegrationZone #DCFCE7 {
+  rectangle "Telegram Agent\nlong polling commands" as Agent
+  rectangle "MCP Bridge\nstdio tools" as Mcp
+  rectangle "Internal metrics collector" as Collector
+}
+
+User --> WebView : открыть Mini App
+WebView --> ReactUi : initData
+ReactUi --> QueryCache : read/write cache
+QueryCache --> ServerAdapter : load/mutate
+ServerAdapter --> HttpApi : JSON request
+ServerAdapter ..> LocalFallback : fallback только для localhost
+
+HttpApi --> Authn : проверить подпись или internal secret
+Authn --> ActorResolution : AuthContext
+ActorResolution --> SQLite : SELECT active user
+ActorResolution --> Authz : RequestContext
+Authz --> SQLite : SELECT family aggregate
+Authz --> DomainLayer : разрешённый write или filtered read
+DomainLayer --> SQLite : BEGIN, replace rows, revision+1, COMMIT
+DomainLayer --> AiPolicy : AI route, если применимо
+AiPolicy --> SQLite : ai_usage cache/read/write
+MetricsStore <-- HttpApi : record on response finish
+HttpApi --> ServerAdapter : envelope или ошибка
+
+User --> Agent : bot command
+Agent --> HttpApi : API request, тот же RBAC
+Agent --> User : bot reply
+
+ToolUser --> Mcp : tool call
+Mcp --> HttpApi : signed actor API request
+HttpApi --> Mcp : visible result
+
+MetricsUser --> Collector : scheduled collection
+Collector --> HttpApi : /api/health и internal metrics
+HttpApi --> Collector : aggregate-only snapshot
+
+legend right
+  |= Поток |= Контроль |
+  | Клиент -> API | Telegram initData, revision |
+  | API -> SQLite | backend transaction |
+  | Agent/MCP -> API | тот же backend RBAC |
+  | Metrics -> API | internal secret, aggregate-only |
+endlegend
+
+@enduml
+

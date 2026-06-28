@@ -25,6 +25,7 @@ export interface Task {
   epicId?: string;
   subtasks: SubTask[];
   createdAt: number;
+  sortOrder?: number;
   dueDate?: string; // ISO Date String YYYY-MM-DD
   reminderTime?: string; // ISO String
   visibleTo?: string[];

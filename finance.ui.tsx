@@ -14,7 +14,9 @@ import {
   Repeat,
   Calendar,
   CheckCircle2,
-  Trash2
+  Pencil,
+  Trash2,
+  Filter
 } from 'lucide-react';
 import { AppData, User, Epic } from './types';
 import { 
@@ -30,6 +32,7 @@ import {
 } from './finance.model';
 import { formatMoney, isVisible } from './utils';
 import { FloatingActionButton, Modal, Panel, Screen, VisibilitySelector } from './ui-kit';
+import { api } from './api';
 
 // --- Components ---
 
@@ -67,7 +70,7 @@ export const TransactionItem = ({ transaction, user }: { transaction: Transactio
   );
 };
 
-export const GoalCard = ({ goal, onClick }: { key?: React.Key, goal: SavingsGoal, onClick: () => void }) => {
+export const GoalCard = ({ goal, onClick, onEdit }: { key?: React.Key, goal: SavingsGoal, onClick: () => void, onEdit: () => void }) => {
     const safeTarget = goal.targetAmount || 1; // Prevent division by zero
     const progress = Math.min((goal.currentAmount / safeTarget) * 100, 100);
     
@@ -80,8 +83,22 @@ export const GoalCard = ({ goal, onClick }: { key?: React.Key, goal: SavingsGoal
                 <div className="w-10 h-10 bg-gray-50 rounded-full flex items-center justify-center text-xl">
                     {goal.icon}
                 </div>
-                <div className="bg-gray-50 px-2 py-1 rounded-lg text-[10px] font-bold text-gray-500">
-                    {Math.round(progress)}%
+                <div className="relative z-20 flex items-center gap-1">
+                    <div className="bg-gray-50 px-2 py-1 rounded-lg text-[10px] font-bold text-gray-500">
+                        {Math.round(progress)}%
+                    </div>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onEdit();
+                        }}
+                        className="w-7 h-7 rounded-lg bg-gray-50 text-gray-500 flex items-center justify-center hover:bg-gray-100 active:scale-95 transition-transform"
+                        aria-label={`Редактировать копилку ${goal.title}`}
+                        title="Редактировать копилку"
+                    >
+                        <Pencil size={14} />
+                    </button>
                 </div>
             </div>
             
@@ -98,7 +115,7 @@ export const GoalCard = ({ goal, onClick }: { key?: React.Key, goal: SavingsGoal
             </div>
             
             {progress >= 100 && (
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center backdrop-blur-sm animate-in fade-in">
+                <div className="absolute inset-0 bg-black/60 flex items-center justify-center backdrop-blur-sm animate-in fade-in pointer-events-none">
                     <div className="bg-white text-black px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1 shadow-xl">
                         <Sparkles size={12} /> Готово!
                     </div>
@@ -383,7 +400,7 @@ export const SavingsGoalEditor = ({ onSave, goal }: { onSave: (g: SavingsGoal) =
                 <input 
                     value={title} 
                     onChange={e => setTitle(e.target.value)}
-                    placeholder="Название цели (напр. LEGO)"
+                    placeholder="Название копилки (например, LEGO)"
                     className="flex-1 bg-gray-50 rounded-xl p-3 outline-none font-bold"
                 />
             </div>
@@ -402,14 +419,15 @@ export const SavingsGoalEditor = ({ onSave, goal }: { onSave: (g: SavingsGoal) =
                     targetAmount: Number(targetAmount) * 100,
                     currentAmount: goal?.currentAmount || 0,
                     icon,
-                    status: 'ACTIVE',
-                    createdById: goal?.createdById || '', // Will be set by store
+                    status: goal?.status || 'ACTIVE',
+                    description: goal?.description,
+                    createdById: goal?.createdById || '',
                     createdAt: goal?.createdAt || Date.now()
                 })}
                 disabled={!title || !targetAmount}
                 className="w-full bg-black text-white rounded-xl py-3 font-bold disabled:opacity-50"
             >
-                {goal ? 'Сохранить' : 'Создать цель'}
+                {goal ? 'Сохранить' : 'Создать копилку'}
             </button>
         </div>
     )
@@ -720,8 +738,43 @@ export const FinanceScreen = ({
     const [isGoalModalOpen, setGoalModalOpen] = useState(false);
     const [isContribOpen, setContribOpen] = useState(false);
     const [isSubModalOpen, setSubModalOpen] = useState(false);
+    const [isHistoryOpen, setHistoryOpen] = useState(false);
+    const [isAnalysisOpen, setAnalysisOpen] = useState(false);
+    const [analysis, setAnalysis] = useState<Record<string, unknown> | null>(null);
+    const [isAnalyzing, setAnalyzing] = useState(false);
+    const [historyFilters, setHistoryFilters] = useState({
+        from: '',
+        to: '',
+        categoryId: 'ALL',
+        accountId: 'ALL',
+        memberId: 'ALL'
+    });
     const [activeGoal, setActiveGoal] = useState<SavingsGoal | null>(null);
     const [activeSub, setActiveSub] = useState<Subscription | null>(null);
+
+    const filteredHistory = visibleTransactions.filter(tx => {
+        const day = tx.date.slice(0, 10);
+        if (historyFilters.from && day < historyFilters.from) return false;
+        if (historyFilters.to && day > historyFilters.to) return false;
+        if (historyFilters.categoryId !== 'ALL' && tx.categoryId !== historyFilters.categoryId) return false;
+        if (historyFilters.accountId !== 'ALL' && tx.accountId !== historyFilters.accountId) return false;
+        if (historyFilters.memberId !== 'ALL' && tx.createdById !== historyFilters.memberId) return false;
+        return true;
+    });
+
+    const runExpenseAnalysis = async () => {
+        if (isAnalyzing) return;
+        setAnalyzing(true);
+        try {
+            const response = await api.analyzeExpenses();
+            setAnalysis(response.result);
+            setAnalysisOpen(true);
+        } catch (error) {
+            alert(error instanceof Error ? error.message : 'Не удалось проанализировать расходы');
+        } finally {
+            setAnalyzing(false);
+        }
+    };
 
     return (
         <Screen className="space-y-5 animate-in fade-in duration-300">
@@ -776,8 +829,8 @@ export const FinanceScreen = ({
                 <div className="flex gap-3 overflow-x-auto pb-3 no-scrollbar snap-x-app">
                     {data.savingsGoals.length === 0 ? (
                         <div className="w-full bg-gray-50 border border-dashed border-gray-200 rounded-[14px] p-5 text-center">
-                            <p className="text-gray-400 text-sm mb-2">Нет целей</p>
-                            <button onClick={() => setGoalModalOpen(true)} className="text-sm font-bold text-blue-500">Создать копилку</button>
+                            <p className="text-gray-400 text-sm mb-2">Нет копилок</p>
+                            <button onClick={() => { setActiveGoal(null); setGoalModalOpen(true); }} className="text-sm font-bold text-blue-500">Создать копилку</button>
                         </div>
                     ) : (
                         data.savingsGoals.map(goal => (
@@ -787,7 +840,11 @@ export const FinanceScreen = ({
                                 onClick={() => {
                                     setActiveGoal(goal);
                                     setContribOpen(true);
-                                }} 
+                                }}
+                                onEdit={() => {
+                                    setActiveGoal(goal);
+                                    setGoalModalOpen(true);
+                                }}
                             />
                         ))
                     )}
@@ -855,9 +912,19 @@ export const FinanceScreen = ({
             <div>
                 <div className="flex items-center justify-between mb-3">
                     <h2 className="text-[17px] font-bold flex items-center gap-2"><PieChart size={18} /> Бюджет (мес)</h2>
-                    <button onClick={onManageBudgets} className="text-gray-400 hover:text-gray-600">
-                        <Settings size={18} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={runExpenseAnalysis}
+                            disabled={isAnalyzing}
+                            className="text-blue-600 bg-blue-50 rounded-lg px-2 py-1 disabled:opacity-50"
+                            aria-label="Проанализировать расходы"
+                        >
+                            <Sparkles size={17} />
+                        </button>
+                        <button onClick={onManageBudgets} className="text-gray-400 hover:text-gray-600" aria-label="Настроить бюджеты">
+                            <Settings size={18} />
+                        </button>
+                    </div>
                 </div>
                 <Panel className="p-4 space-y-4">
                     {budgetStats.length === 0 ? (
@@ -910,7 +977,12 @@ export const FinanceScreen = ({
                         ))
                     )}
                     <div className="p-3 text-center border-t border-gray-50">
-                        <button className="text-xs text-gray-400 font-medium uppercase tracking-wide">Показать все</button>
+                        <button
+                            onClick={() => setHistoryOpen(true)}
+                            className="text-xs text-gray-500 font-bold uppercase tracking-wide"
+                        >
+                            Показать все
+                        </button>
                     </div>
                 </Panel>
             </div>
@@ -918,10 +990,15 @@ export const FinanceScreen = ({
             <FloatingActionButton onClick={onAddTransaction} icon={Plus} label="Добавить операцию" />
 
             {/* Modals */}
-            <Modal isOpen={isGoalModalOpen} onClose={() => setGoalModalOpen(false)} title={activeGoal ? 'Редактировать цель' : 'Новая цель'}>
+            <Modal isOpen={isGoalModalOpen} onClose={() => setGoalModalOpen(false)} title={activeGoal ? 'Редактировать копилку' : 'Новая копилка'}>
                 <SavingsGoalEditor 
                     onSave={(g) => {
-                        if (onSaveSavingsGoal) onSaveSavingsGoal(g);
+                        if (onSaveSavingsGoal) {
+                            onSaveSavingsGoal({
+                                ...g,
+                                createdById: g.createdById || activeGoal?.createdById || data.currentUser.id
+                            });
+                        }
                         setGoalModalOpen(false);
                     }} 
                     goal={activeGoal} 
@@ -951,6 +1028,126 @@ export const FinanceScreen = ({
                     accounts={visibleAccounts}
                     subscription={activeSub}
                 />
+            </Modal>
+
+            <Modal isOpen={isHistoryOpen} onClose={() => setHistoryOpen(false)} title="История операций">
+                <div className="space-y-4 pb-12">
+                    <div className="grid grid-cols-2 gap-2">
+                        <input
+                            type="date"
+                            value={historyFilters.from}
+                            onChange={event => setHistoryFilters(prev => ({ ...prev, from: event.target.value }))}
+                            className="bg-gray-50 rounded-xl p-3 text-sm outline-none border border-gray-100"
+                        />
+                        <input
+                            type="date"
+                            value={historyFilters.to}
+                            onChange={event => setHistoryFilters(prev => ({ ...prev, to: event.target.value }))}
+                            className="bg-gray-50 rounded-xl p-3 text-sm outline-none border border-gray-100"
+                        />
+                        <select
+                            value={historyFilters.categoryId}
+                            onChange={event => setHistoryFilters(prev => ({ ...prev, categoryId: event.target.value }))}
+                            className="bg-gray-50 rounded-xl p-3 text-sm outline-none border border-gray-100"
+                        >
+                            <option value="ALL">Все категории</option>
+                            {Object.values(CATEGORIES).map(category => (
+                                <option key={category.id} value={category.id}>{category.label}</option>
+                            ))}
+                        </select>
+                        <select
+                            value={historyFilters.accountId}
+                            onChange={event => setHistoryFilters(prev => ({ ...prev, accountId: event.target.value }))}
+                            className="bg-gray-50 rounded-xl p-3 text-sm outline-none border border-gray-100"
+                        >
+                            <option value="ALL">Все счета</option>
+                            {visibleAccounts.map(account => (
+                                <option key={account.id} value={account.id}>{account.name}</option>
+                            ))}
+                        </select>
+                        <select
+                            value={historyFilters.memberId}
+                            onChange={event => setHistoryFilters(prev => ({ ...prev, memberId: event.target.value }))}
+                            className="col-span-2 bg-gray-50 rounded-xl p-3 text-sm outline-none border border-gray-100"
+                        >
+                            <option value="ALL">Все участники</option>
+                            {data.members.map(member => (
+                                <option key={member.id} value={member.id}>{member.name}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-gray-400">
+                        <span className="flex items-center gap-1"><Filter size={13} /> {filteredHistory.length} операций</span>
+                        <button
+                            onClick={() => setHistoryFilters({ from: '', to: '', categoryId: 'ALL', accountId: 'ALL', memberId: 'ALL' })}
+                            className="font-bold text-gray-500"
+                        >
+                            Сбросить
+                        </button>
+                    </div>
+
+                    <Panel className="overflow-hidden">
+                        {filteredHistory.length === 0 ? (
+                            <div className="p-8 text-center text-gray-400 text-sm">Операции не найдены</div>
+                        ) : (
+                            filteredHistory.map(tx => (
+                                <button
+                                    type="button"
+                                    key={tx.id}
+                                    onClick={() => {
+                                        setHistoryOpen(false);
+                                        onEditTransaction(tx);
+                                    }}
+                                    className="w-full px-4 text-left cursor-pointer hover:bg-gray-50 transition-colors"
+                                >
+                                    <TransactionItem
+                                        transaction={tx}
+                                        user={data.members.find(member => member.id === tx.createdById)}
+                                    />
+                                </button>
+                            ))
+                        )}
+                    </Panel>
+                </div>
+            </Modal>
+
+            <Modal isOpen={isAnalysisOpen} onClose={() => setAnalysisOpen(false)} title="Анализ расходов">
+                <div className="space-y-4 pb-10">
+                    <div className="bg-blue-50 border border-blue-100 rounded-[14px] p-4 text-sm text-blue-950">
+                        {String(analysis?.summary || 'Нет данных для анализа')}
+                    </div>
+                    {Array.isArray(analysis?.topCategories) && (
+                        <div className="space-y-2">
+                            <h3 className="text-sm font-bold">Топ категорий</h3>
+                            {(analysis.topCategories as Array<{ label?: string; amount?: number }>).map((item, index) => (
+                                <div key={`${item.label}-${index}`} className="flex items-center justify-between bg-gray-50 rounded-xl p-3 text-sm">
+                                    <span>{item.label || 'Категория'}</span>
+                                    <span className="font-bold">{formatMoney(Number(item.amount) || 0)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {Array.isArray(analysis?.budgetWarnings) && (analysis.budgetWarnings as unknown[]).length > 0 && (
+                        <div className="space-y-2">
+                            <h3 className="text-sm font-bold">Бюджеты под вниманием</h3>
+                            {(analysis.budgetWarnings as Array<{ label?: string; spent?: number; limit?: number; percent?: number }>).map((item, index) => (
+                                <div key={`${item.label}-${index}`} className="bg-red-50 text-red-900 rounded-xl p-3 text-sm">
+                                    <div className="font-bold">{item.label || 'Категория'} · {item.percent || 0}%</div>
+                                    <div className="text-xs">{formatMoney(Number(item.spent) || 0)} / {formatMoney(Number(item.limit) || 0)}</div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {Array.isArray(analysis?.suggestions) && (
+                        <div className="space-y-2">
+                            <h3 className="text-sm font-bold">Что сделать</h3>
+                            {(analysis.suggestions as string[]).map((item, index) => (
+                                <div key={`${item}-${index}`} className="bg-gray-50 rounded-xl p-3 text-sm text-gray-700">{item}</div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </Modal>
 
         </Screen>

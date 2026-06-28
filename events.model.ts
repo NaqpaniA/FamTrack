@@ -7,7 +7,8 @@ import {
     Repeat, 
     Trophy, 
     Sparkles,
-    ShoppingCart
+    ShoppingCart,
+    StickyNote
 } from 'lucide-react';
 
 // --- Types ---
@@ -18,6 +19,7 @@ export type EventType =
   | 'GOAL_CONTRIBUTION' 
   | 'SUBSCRIPTION_PAID' 
   | 'SHOPPING_CHECKOUT'
+  | 'NOTE_CREATED'
   | 'LEVEL_UP';
 
 export interface AppEvent {
@@ -55,6 +57,11 @@ export const EVENT_CONFIG: Record<EventType, { icon: any, color: string, format:
         icon: ShoppingCart,
         color: 'bg-orange-100 text-orange-600',
         format: (p) => `Купил(а) продукты (${p.count} шт.) на ${p.totalStr}`
+    },
+    NOTE_CREATED: {
+        icon: StickyNote,
+        color: 'bg-sky-100 text-sky-600',
+        format: () => 'Добавил(а) семейную заметку'
     },
     LEVEL_UP: {
         icon: Trophy,

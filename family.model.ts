@@ -5,6 +5,7 @@ export type Role = 'OWNER' | 'ADMIN' | 'CHILD';
 
 export interface User {
   id: string;
+  familyId?: string;
   name: string;
   role: Role;
   avatar: string; // Emoji

@@ -1,0 +1,86 @@
+@startuml
+title
+FamTrack - LLD компонентов
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam defaultFontName "DejaVu Sans"
+skinparam packageStyle rectangle
+skinparam ArrowColor #475569
+skinparam component {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+
+package "Browser Mini App" as Browser #E0F2FE {
+  [Экранные модули\n`dashboard.ui.tsx`, `tasks.ui.tsx`,\n`finance.ui.tsx`, `family.ui.tsx`,\n`shopping.ui.tsx`, `notes.ui.tsx`] as Screens
+  [useAppStore\n`store.ts`\nсквозные actions] as Store
+  [React Query hooks\n`queries.ts`\ncache + optimistic mutations] as Queries
+  [ServerAdapter\n`api.ts`\nrevision-aware API client] as ApiAdapter
+  [Domain models\n`*.model.ts`, `types.ts`] as Models
+  [Telegram WebApp utils\n`utils.ts`] as TwaUtils
+  [LocalDatabase\nlocalStorage dev fallback] as LocalDb
+}
+
+package "HTTP Backend" as Server #EDE9FE {
+  [HTTP router\n`server/index.ts`] as Router
+  [Auth validation\n`server/auth.ts`] as Auth
+  [RBAC and filtering\n`server/rbac.ts`] as Rbac
+  [AI helper policy\ncache, limit, heuristic result] as AiHelpers
+  [Metrics store\nroute groups, latency, memory] as Metrics
+  [Static asset serving\nSPA fallback] as StaticAssets
+}
+
+package "Persistence" as Persistence #FFF7ED {
+  [FamTrackDatabase\n`server/database.ts`] as Database
+  [Migration engine\ncreate schema, legacy upgrade,\nvalidation] as Migrations
+  [Row mappers\nSQL rows <-> AppData] as RowMappers
+  database "SQLite file\nfamilies.revision" as SqliteFile
+}
+
+package "Integrations" as Integrations #DCFCE7 {
+  [Telegram Agent\n`agent/famtrack_agent.py`] as Agent
+  [MCP Bridge\n`mcp/famtrack_mcp.py`] as Mcp
+  [Telegram Bot API] as TelegramApi
+  [Internal collector] as Collector
+}
+
+Screens --> Store : пользовательские действия
+Store --> Queries : mutate/invalidate
+Queries --> ApiAdapter : loadData/write
+ApiAdapter --> Router : HTTP JSON
+ApiAdapter ..> LocalDb : только localhost fallback
+
+Screens --> Models : typed props
+Store --> Models : доменная логика UI layer
+Screens --> TwaUtils : haptics, theme, initData
+
+Router --> Auth : validateRequestAuth()
+Router --> Rbac : assertCanWrite(), filterForActor()
+Router --> AiHelpers : /api/ai/*
+Router --> Metrics : record on finish
+Router --> StaticAssets : non-API request
+Router --> Database : exportEnvelope(), mutate()
+
+Database --> Migrations : open-time migration
+Database --> RowMappers : rowTo* and insert*
+Database --> SqliteFile : export/persist bytes
+
+Agent <--> TelegramApi : long polling
+Agent --> Router : API reads/writes
+Mcp --> Router : tool reads/writes
+Collector --> Router : internal metrics
+
+legend bottom
+  1. Browser формирует UX и optimistic cache.
+  2. Backend является enforcement layer.
+  3. Persistence хранит family-scoped aggregate.
+  4. Agent и MCP не обходят API/RBAC.
+endlegend
+
+@enduml
+

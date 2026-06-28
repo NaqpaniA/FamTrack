@@ -243,6 +243,7 @@ def configure_bot_surface(telegram: "Telegram") -> None:
         ("shopping", "покупки"),
         ("balance", "баланс"),
         ("finance", "финансы"),
+        ("newfamily", "owner: инвайт для новой семьи"),
         ("plan", "owner: план без изменений"),
         ("agent", "owner: агент Codex"),
     ]
@@ -308,6 +309,13 @@ class FamTrackClient:
         envelope = self.get_data(telegram_user)
         payload = {"revision": envelope["revision"], **body}
         return http_json("POST", f"{FAMTRACK_API_BASE}{path}", payload, headers=self.headers(telegram_user))
+
+    def create_new_family_invite(self, telegram_user: dict[str, Any], family_name: str) -> dict[str, Any]:
+        return self.post(telegram_user, "/api/family/invites", {
+            "newFamily": True,
+            "familyName": family_name,
+            "role": "OWNER",
+        })
 
 
 def truncate(text: str, limit: int) -> str:
@@ -465,6 +473,32 @@ def add_shopping(client: FamTrackClient, telegram_user: dict[str, Any], title: s
     return f"Добавил в покупки: {title}"
 
 
+def create_new_family_invite(client: FamTrackClient, telegram_user: dict[str, Any], family_name: str) -> str:
+    family_name = family_name.strip()
+    if not family_name:
+        return "Напиши: /newfamily Родители"
+    response = client.create_new_family_invite(telegram_user, family_name)
+    invite = response.get("invite") or {}
+    url = response.get("url") or ""
+    audit("new_family_invite_created", {
+        "telegram_id": telegram_user.get("id"),
+        "family_name": family_name,
+        "token": invite.get("token"),
+    })
+    return (
+        f"Инвайт для новой семьи «{family_name}» готов.\n\n"
+        "Перешли будущему владельцу семьи это сообщение:\n\n"
+        "Привет! Я завёл для вас FamTrack — семейный трекер задач, покупок, наград и финансов.\n\n"
+        "Что сделать:\n"
+        "1. Открой ссылку из своего Telegram-аккаунта.\n"
+        "2. Нажми «Принять приглашение» в Mini App.\n"
+        "3. После входа зайди в «Семья → Состав → Инвайт» и пригласи остальных.\n"
+        "4. Если хотите команды в общем чате, создайте семейный групповой чат и добавьте туда бота.\n\n"
+        f"{url}\n\n"
+        "Первый человек, который примет ссылку, станет owner этой отдельной семьи."
+    )
+
+
 def load_pending() -> dict[str, Any]:
     if not PENDING_FILE.exists():
         return {}
@@ -587,6 +621,12 @@ def handle_command(client: FamTrackClient, telegram: Telegram, message: dict[str
     if command in ("/balance", "/finance"):
         telegram.send_message(chat_id, format_balance(client.get_data(telegram_user)), message_id)
         return
+    if command == "/newfamily":
+        if not is_owner(user_id):
+            telegram.send_message(chat_id, "Создавать новые семьи может только developer owner.", message_id)
+            return
+        telegram.send_message(chat_id, create_new_family_invite(client, telegram_user, args), message_id)
+        return
     if command == "/plan":
         if not is_owner(user_id):
             telegram.send_message(chat_id, "Plan-режим агента доступен только owner.", message_id)
@@ -669,6 +709,7 @@ HELP_TEXT = """FamTrack agent:
 /balance
 
 Owner:
+/newfamily Родители
 /plan цель
 /agent задача для Codex
 

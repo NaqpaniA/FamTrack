@@ -1,85 +1,78 @@
-# Architectural Design Record (ADR) 005: Activity Feed & Event Log
+# ADR 005: Лента активности и журнал событий
 
-**Status:** APPROVED
-**Date:** 2024-05-30
-**Author:** Senior Product Architect
-**Target Feature:** User Engagement & Observability
+**Статус:** ПРИНЯТО
+**Дата исходного решения:** 2024-05-30
+**Дата актуализации:** 2026-06-28
+**Источник актуализации:** `FamTrack@768af344db91`
 
----
+## 1. Проблема
 
-## 1. Context & Problem Statement
+Когда в семье много задач, финансовых действий, наград и покупок, пользователю
+нужен быстрый ответ на вопросы:
 
-As **Family OS** grows (Tasks, Finance, Shopping, Rewards), keeping track of changes becomes difficult.
-*   **Problem:** A parent opens the app and sees the balance changed, but doesn't know *why* (Did a subscription hit? Did someone buy a reward?).
-*   **Problem:** A child completes chores, but feels unnoticed because the parent didn't check the "Tasks" tab immediately.
-*   **Missing Element:** A centralized "Narrative" of family life.
+- кто изменил состояние;
+- почему изменился баланс;
+- за что начислили XP;
+- какие семейные события произошли недавно.
 
-**Goal:** Implement an **Activity Feed** on the Dashboard that logs significant events in real-time, providing context and social validation.
+Без ленты активности изменения выглядят неожиданными и плохо объяснимыми.
 
----
+## 2. Решение
 
-## 2. Decision: Event-Driven Logging
+Введена сущность `AppEvent`. Это lightweight event log для пользовательского
+контекста. События не являются полноценным event sourcing: текущее состояние не
+восстанавливается из events, но events объясняют значимые изменения.
 
-We will introduce a lightweight **Event Sourcing** pattern. While we won't strictly rebuild state from events (yet), we will log every significant "Write" action as an immutable `AppEvent`.
+Типы событий:
 
-### Core Concepts:
-1.  **The Event Entity:** Contains `actorId` (who), `type` (what), `payload` (details), and `timestamp`.
-2.  **Unified Store Injection:** The `useAppStore` actions will be responsible for generating events alongside state mutations.
-3.  **Dashboard Integration:** The feed will appear on the Dashboard, sorted chronologically.
+- `TASK_COMPLETED`
+- `REWARD_BOUGHT`
+- `GOAL_CONTRIBUTION`
+- `SUBSCRIPTION_PAID`
+- `SHOPPING_CHECKOUT`
+- `NOTE_CREATED`
+- `LEVEL_UP`
 
----
+## 3. Модель данных
 
-## 3. Data Architecture
+`events`:
 
-### Schema Updates
+- `family_id`
+- `id`
+- `type`
+- `actor_id`
+- `payload_json`
+- `timestamp`
 
-```typescript
-type EventType = 
-  | 'TASK_COMPLETED' 
-  | 'REWARD_BOUGHT' 
-  | 'GOAL_CONTRIBUTION' 
-  | 'SUBSCRIPTION_PAID' 
-  | 'SHOPPING_CHECKOUT'
-  | 'LEVEL_UP';
+Payload остаётся JSON, потому что разные события имеют разную структуру.
 
-interface AppEvent {
-  id: string;
-  type: EventType;
-  actorId: string; // User ID
-  payload: Record<string, any>; // Flexible JSON, e.g. { taskTitle: "Wash dishes", amount: 500 }
-  timestamp: number;
-}
+## 4. Где создаются события
 
-// Add to AppData
-interface AppData {
-  // ... existing
-  events: AppEvent[];
-}
-```
+События создаются в двух местах:
 
----
+- frontend store при compound UX-действиях;
+- backend при server-normalized операциях, например создании family note.
 
-## 4. User Experience (UI)
+Backend сохраняет события как часть того же family mutation, поэтому event и
+изменение состояния попадают в одну revision.
 
-### 4.1. The Feed Item
-*   **Avatar:** Shows who performed the action.
-*   **Icon:** Contextual icon (Checkmark for tasks, Coins for finance).
-*   **Text:** "Dad completed **Buy Milk** (+50 XP)".
-*   **Time:** Relative time (e.g., "2 hours ago").
+## 5. Видимость
 
-### 4.2. Location
-Placed on the **Dashboard**, below the "Summary Cards" and above "Projects". This ensures it's the first thing users see after checking their stats.
+Owner видит семейную активность шире остальных. Для non-owner `filterForActor()`
+ограничивает events: пользователь видит свои события, а admin видит больше
+операционной активности.
 
----
+## 6. Риски и развитие
 
-## 5. Implementation Strategy
+- Payload JSON не типизирован на уровне БД.
+- Некоторые события формируются клиентом, поэтому server-side command model
+  сделал бы журнал изменений строже.
+- Для будущего ИБ-уровня можно разделить user-facing activity feed и
+  неизменяемый журнал безопасности.
 
-1.  **Model:** Create `events.model.ts`.
-2.  **Store:** Refactor `store.ts` actions.
-    *   `toggleTaskStatus` -> Log `TASK_COMPLETED`.
-    *   `buyReward` -> Log `REWARD_BOUGHT`.
-    *   `contributeToGoal` -> Log `GOAL_CONTRIBUTION`.
-    *   `paySubscription` -> Log `SUBSCRIPTION_PAID`.
-    *   `checkoutShoppingList` -> Log `SHOPPING_CHECKOUT`.
-3.  **UI:** Create `FeedItem` component in `dashboard.ui.tsx`.
+## 7. Связанные диаграммы
+
+- `diagrams/data-model-erd.puml`
+- `diagrams/data-flows.puml`
+- `diagrams/activities-end-to-end.puml`
 

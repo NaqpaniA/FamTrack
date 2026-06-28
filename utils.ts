@@ -93,6 +93,9 @@ export class LocalDatabase {
         if (!parsed.inventory) {
             parsed.inventory = [];
         }
+        if (!parsed.notes) {
+            parsed.notes = [];
+        }
         return parsed;
       }
     } catch (e) {

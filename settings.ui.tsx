@@ -2,16 +2,24 @@
 import React from 'react';
 import { AppData } from './types';
 import { Avatar } from './ui-kit';
-import { RotateCcw, UserCircle2 } from 'lucide-react';
+import { Download, UserCircle2 } from 'lucide-react';
 
 export const SettingsModal = ({ 
-    data, 
-    onReset 
+    data
 }: { 
-    data: AppData, 
-    onReset: () => void 
+    data: AppData,
+    onReset?: () => void
 }) => {
     const isOwner = data.currentUser.role === 'OWNER';
+    const exportBackup = () => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `famtrack-${data.family?.id || 'family'}-${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+    };
 
     return (
         <div className="space-y-6">
@@ -51,14 +59,14 @@ export const SettingsModal = ({
                  {isOwner ? (
                     <>
                         <button
-                            onClick={onReset}
-                            className="w-full flex items-center justify-center gap-2 p-4 rounded-xl bg-red-50 text-red-600 font-bold text-sm hover:bg-red-100 transition-colors"
+                            onClick={exportBackup}
+                            className="w-full flex items-center justify-center gap-2 p-4 rounded-xl bg-gray-950 text-white font-bold text-sm hover:bg-black transition-colors"
                         >
-                            <RotateCcw size={18} />
-                            Сбросить все данные и начать заново
+                            <Download size={18} />
+                            Скачать резервную копию
                         </button>
                         <p className="text-[10px] text-center text-gray-400">
-                            Это удалит все задачи, транзакции и вернет стандартные настройки.
+                            Сброс семьи скрыт из обычного интерфейса, чтобы случайно не потерять рабочие данные.
                         </p>
                     </>
                  ) : (

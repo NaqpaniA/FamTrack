@@ -6,6 +6,7 @@ import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContr
 import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
 import { ShoppingItem, ShoppingCategoryType } from './shopping.model';
 import { AppEvent, EventType } from './events.model';
+import { Note } from './notes.model';
 import { TWA, generateId, formatMoney } from './utils';
 import { useFamilyData, useMutations } from './queries';
 import { INITIAL_DATA } from './data';
@@ -211,6 +212,32 @@ export const useAppStore = () => {
       }
   };
 
+  const moveTask = (id: string, status: TaskStatus, beforeTaskId?: string) => {
+      const task = data.tasks.find(t => t.id === id);
+      if (!task) return;
+
+      const targetColumn = data.tasks
+          .filter(item => item.id !== id && item.status === status)
+          .sort((left, right) => (left.sortOrder ?? left.createdAt) - (right.sortOrder ?? right.createdAt));
+      const insertIndex = beforeTaskId
+          ? Math.max(0, targetColumn.findIndex(item => item.id === beforeTaskId))
+          : targetColumn.length;
+      const nextColumn = [...targetColumn];
+      nextColumn.splice(insertIndex < 0 ? targetColumn.length : insertIndex, 0, { ...task, status });
+
+      const updates = nextColumn.map((item, index) => ({
+          id: item.id,
+          status,
+          sortOrder: (index + 1) * 1000
+      }));
+
+      mutations.reorderTasks.mutate(updates, {
+          onSuccess: () => addToast('Порядок задач сохранён', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось переместить задачу', 'ERROR')
+      });
+      TWA.selection();
+  };
+
   const saveTransaction = (txData: any) => {
       const isUpdate = !!txData.id;
       const txId = txData.id || generateId();
@@ -280,8 +307,32 @@ export const useAppStore = () => {
   };
 
   const saveEpic = (epic: Epic) => {
-      mutations.saveEpic.mutate(epic);
+      mutations.saveEpic.mutate({
+          ...epic,
+          createdById: epic.createdById || data.currentUser.id
+      });
       TWA.haptic('light');
+  };
+
+  const deleteEpic = (id: string) => {
+      mutations.deleteEpic.mutate(id);
+      TWA.haptic('medium');
+  };
+
+  const saveNote = (note: Note) => {
+      mutations.saveNote.mutate(note, {
+          onSuccess: () => addToast(note.isArchived ? 'Заметка архивирована' : 'Заметка сохранена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить заметку', 'ERROR')
+      });
+      TWA.haptic('light');
+  };
+
+  const deleteNote = (id: string) => {
+      mutations.deleteNote.mutate(id, {
+          onSuccess: () => addToast('Заметка удалена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось удалить заметку', 'ERROR')
+      });
+      TWA.haptic('medium');
   };
 
   const updateUser = (updatedUser: User) => {
@@ -604,9 +655,10 @@ export const useAppStore = () => {
     removeToast,
     actions: {
       app: { switchUser, resetData, checkDailyStreak },
-      tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus },
+      tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus, move: moveTask },
       finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal, saveSubscription, deleteSubscription, paySubscription },
-      epics: { save: saveEpic },
+      epics: { save: saveEpic, delete: deleteEpic },
+      notes: { save: saveNote, delete: deleteNote },
       family: { updateUser, saveUser: saveFamilyUser, archiveUser: archiveFamilyUser, restoreUser: restoreFamilyUser, buyReward, consumeItem },
       shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList }
     }

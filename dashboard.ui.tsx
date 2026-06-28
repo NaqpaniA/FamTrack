@@ -15,19 +15,38 @@ import { Avatar, Panel, Screen, SectionHeader } from './ui-kit';
 import { formatMoney, isVisible } from './utils';
 import { isOverdue, isToday } from './tasks.model';
 import { EVENT_CONFIG } from './events.model';
+import { NotesWidget } from './notes.ui';
+
+const EPIC_COLOR_CLASSES: Record<string, string> = {
+    'bg-blue-500': 'bg-blue-500',
+    'bg-red-500': 'bg-red-500',
+    'bg-green-500': 'bg-green-500',
+    'bg-yellow-500': 'bg-yellow-500',
+    'bg-purple-500': 'bg-purple-500',
+    'bg-pink-500': 'bg-pink-500',
+    'bg-orange-500': 'bg-orange-500',
+    'bg-indigo-500': 'bg-indigo-500',
+    'bg-teal-500': 'bg-teal-500'
+};
+
+const getEpicColorClass = (color: string) => EPIC_COLOR_CLASSES[color] || EPIC_COLOR_CLASSES['bg-blue-500'];
 
 export const DashboardScreen = ({ 
     data, 
     onTaskClick, 
     onNavigate,
     onAddEpic,
-    onOpenProfile
+    onOpenProfile,
+    onOpenNotes,
+    onAddNote
 }: { 
     data: AppData, 
     onTaskClick: (t: Task) => void,
     onNavigate: (tab: Tab, epicId?: string) => void,
     onAddEpic: () => void,
-    onOpenProfile: () => void
+    onOpenProfile: () => void,
+    onOpenNotes: () => void,
+    onAddNote: () => void
 }) => {
     const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser));
     const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser));
@@ -103,6 +122,8 @@ export const DashboardScreen = ({
                 </div>
             </div>
 
+            <NotesWidget data={data} onOpenAll={onOpenNotes} onCreate={onAddNote} />
+
             {/* Epics / Projects Scroll */}
             <div>
                 <SectionHeader
@@ -115,15 +136,15 @@ export const DashboardScreen = ({
                          const total = epicTasks.length;
                          const done = epicTasks.filter(t => t.status === 'DONE').length;
                          const progress = total > 0 ? (done / total) * 100 : 0;
+                         const epicColorClass = getEpicColorClass(epic.color);
 
                          return (
                              <div 
                                 key={epic.id} 
                                 onClick={() => onNavigate('TASKS', epic.id)}
-                                className="min-w-[148px] h-28 p-3 rounded-[14px] text-white relative overflow-hidden shadow-md transform transition-transform active:scale-95 cursor-pointer snap-start"
-                                style={{ backgroundColor: epic.color.replace('bg-', '').replace('text-', '') }} 
+                                className={`min-w-[148px] h-28 p-3 rounded-[14px] text-white relative overflow-hidden shadow-md transform transition-transform active:scale-95 cursor-pointer snap-start ${epicColorClass}`}
                              >
-                                 <div className={`absolute inset-0 ${epic.color} opacity-90`} />
+                                 <div className={`absolute inset-0 ${epicColorClass} opacity-90`} />
                                  <div className="absolute top-0 right-0 p-8 bg-white/10 rounded-full -mr-4 -mt-4 blur-xl"></div>
                                  <div className="relative z-10 flex flex-col h-full justify-between">
                                      <div className="font-bold text-[16px] leading-tight line-clamp-2">{epic.title}</div>

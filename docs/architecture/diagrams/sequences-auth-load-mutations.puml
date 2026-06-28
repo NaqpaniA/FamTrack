@@ -1,0 +1,104 @@
+@startuml
+title
+FamTrack - вход, загрузка данных, мутации и conflict handling
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam sequence {
+  ArrowColor #475569
+  LifeLineBorderColor #64748B
+  LifeLineBackgroundColor #F8FAFC
+  ParticipantBorderColor #334155
+  ParticipantBackgroundColor #F8FAFC
+  ActorBorderColor #B45309
+  ActorBackgroundColor #FEF3C7
+}
+autonumber
+
+actor "Участник семьи" as User
+participant "Telegram WebView" as WebView
+participant "React Mini App" as Frontend
+participant "ServerAdapter\napi.ts" as Adapter
+participant "HTTP API\nserver/index.ts" as Api
+participant "Auth\nserver/auth.ts" as Auth
+participant "RBAC\nserver/rbac.ts" as Rbac
+participant "FamTrackDatabase\nserver/database.ts" as Db
+database "SQLite" as SQLite
+
+group Загрузка приложения
+  User -> WebView : Открывает Mini App
+  WebView -> Frontend : initData + themeParams
+  Frontend -> Adapter : loadData()
+  Adapter -> Api : GET /api/app-data\nX-Telegram-Init-Data
+  Api -> Auth : validateRequestAuth(initData)
+  Auth -> Auth : HMAC Telegram initData
+  Auth --> Api : AuthContext
+  Api -> Db : resolveActor(auth)
+  Db -> SQLite : SELECT active user\nby telegram_id/username
+  SQLite --> Db : user row
+  Api -> Db : exportEnvelope(actor)
+  Db -> SQLite : SELECT family-scoped rows
+  SQLite --> Db : AppData rows
+  Api -> Rbac : filterForActor(data, actor)
+  Rbac --> Api : visible AppData
+  Api --> Adapter : {revision, data}
+  Adapter -> Adapter : latestRevision = revision
+  Adapter --> Frontend : React Query cache update
+end
+
+group Успешная запись
+  User -> Frontend : Изменяет задачу/финансы/заметку
+  Frontend -> Frontend : Собрать payload
+  Frontend -> Frontend : Optimistic cache update\nесли mutation поддерживает rollback
+  Frontend -> Adapter : requestEnvelope(path, body)
+  Adapter -> Api : POST /api/...\n{revision: latestRevision, body}
+  Api -> Auth : validateRequestAuth()
+  Auth --> Api : AuthContext
+  Api -> Db : resolveActor()
+  Db --> Api : actor
+  Api -> Rbac : assertCanWrite()\nили sanitizeBatchUpdates()
+  Rbac --> Api : allowed
+  Api -> Db : mutate(familyId, revision, mutator, actor)
+  Db -> SQLite : SELECT current revision
+  SQLite --> Db : same revision
+  Db -> SQLite : BEGIN IMMEDIATE
+  Db -> SQLite : replace family rows
+  Db -> SQLite : UPDATE families.revision = revision + 1
+  Db -> SQLite : COMMIT
+  Db -> Db : persist exported bytes
+  Db --> Api : next envelope
+  Api -> Rbac : filterForActor(nextData, actor)
+  Api --> Adapter : {nextRevision, filteredData}
+  Adapter -> Adapter : latestRevision = nextRevision
+  Adapter --> Frontend : success
+  Frontend -> Frontend : invalidateQueries(KEYS.DATA)
+end
+
+group Конфликт ревизии
+  User -> Frontend : Отправляет write со stale cache
+  Adapter -> Api : POST /api/...\n{revision: oldRevision, body}
+  Api -> Db : mutate(...)
+  Db -> SQLite : SELECT current revision
+  SQLite --> Db : newer revision
+  Db --> Api : RevisionConflictError
+  Api --> Adapter : 409 {error}
+  Adapter --> Frontend : ApiError
+  Frontend -> Frontend : rollback optimistic cache
+  Frontend -> Adapter : GET /api/app-data
+  Adapter --> Frontend : актуальное состояние
+end
+
+group Auth failure
+  Adapter -> Api : request without valid initData
+  Api -> Auth : validateRequestAuth()
+  Auth --> Api : AuthError
+  Api --> Adapter : 401
+  Adapter --> Frontend : show error state
+end
+
+@enduml
+

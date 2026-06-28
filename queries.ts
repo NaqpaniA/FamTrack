@@ -4,6 +4,7 @@ import { api } from './api';
 import { AppData, User } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
+import { Note } from './notes.model';
 import { INITIAL_DATA } from './data';
 import { TWA } from './utils';
 
@@ -78,6 +79,28 @@ export const useMutations = () => {
             onSettled: () => invalidate()
         }),
 
+        reorderTasks: useMutation({
+            mutationFn: (tasks: Array<{ id: string; status: Task['status']; sortOrder: number }>) => api.reorderTasks(tasks),
+            onMutate: async (updates) => {
+                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
+                const prevData = getData();
+                const byId = new Map(updates.map(update => [update.id, update]));
+                setData({
+                    ...prevData,
+                    tasks: prevData.tasks.map(task => {
+                        const update = byId.get(task.id);
+                        return update ? { ...task, status: update.status, sortOrder: update.sortOrder } : task;
+                    })
+                });
+                return { prevData };
+            },
+            onError: (err, updates, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
+            onSettled: () => invalidate()
+        }),
+
         saveTransaction: useMutation({
             mutationFn: (tx: Transaction) => api.saveTransaction(tx),
             onMutate: async (tx) => {
@@ -113,6 +136,40 @@ export const useMutations = () => {
         
         saveEpic: useMutation({
             mutationFn: (epic: Epic) => api.saveEpic(epic),
+            onMutate: async (epic) => {
+                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
+                const prevData = getData();
+                const existingIdx = prevData.epics.findIndex(item => item.id === epic.id);
+                const epics = [...prevData.epics];
+                if (existingIdx >= 0) epics[existingIdx] = epic;
+                else epics.push(epic);
+                setData({ ...prevData, epics });
+                return { prevData };
+            },
+            onError: (err, epic, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
+            onSettled: () => invalidate()
+        }),
+
+        deleteEpic: useMutation({
+            mutationFn: (id: string) => api.deleteEpic(id),
+            onMutate: async (id) => {
+                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
+                const prevData = getData();
+                setData({
+                    ...prevData,
+                    epics: prevData.epics.filter(epic => epic.id !== id),
+                    tasks: prevData.tasks.map(task => task.epicId === id ? { ...task, epicId: undefined } : task),
+                    goals: prevData.goals.map(goal => goal.epicId === id ? { ...goal, epicId: undefined } : goal)
+                });
+                return { prevData };
+            },
+            onError: (err, id, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
             onSettled: () => invalidate()
         }),
 
@@ -128,6 +185,40 @@ export const useMutations = () => {
 
         restoreUser: useMutation({
             mutationFn: (id: string) => api.restoreUser(id),
+            onSettled: () => invalidate()
+        }),
+
+        saveNote: useMutation({
+            mutationFn: (note: Note) => api.saveNote(note),
+            onMutate: async (note) => {
+                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
+                const prevData = getData();
+                const notes = [...(prevData.notes || [])];
+                const existingIdx = notes.findIndex(item => item.id === note.id);
+                if (existingIdx >= 0) notes[existingIdx] = note;
+                else notes.unshift(note);
+                setData({ ...prevData, notes });
+                return { prevData };
+            },
+            onError: (err, note, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
+            onSettled: () => invalidate()
+        }),
+
+        deleteNote: useMutation({
+            mutationFn: (id: string) => api.deleteNote(id),
+            onMutate: async (id) => {
+                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
+                const prevData = getData();
+                setData({ ...prevData, notes: (prevData.notes || []).filter(note => note.id !== id) });
+                return { prevData };
+            },
+            onError: (err, id, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
             onSettled: () => invalidate()
         }),
 

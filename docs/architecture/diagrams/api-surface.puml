@@ -1,0 +1,114 @@
+@startuml
+title
+FamTrack - карта HTTP API
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam defaultFontName "DejaVu Sans"
+skinparam component {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+skinparam packageStyle rectangle
+
+package "Public health" as PublicHealth #DCFCE7 {
+  [GET /api/health\nreadiness metadata] as Health
+}
+
+package "Authenticated read model" as ReadModel #E0F2FE {
+  [GET /api/app-data\n{revision, filtered AppData}] as AppData
+}
+
+package "Family management" as FamilyApi #FEF3C7 {
+  [POST /api/family/invites\nсоздать invite] as CreateInvite
+  [POST /api/family/invites/accept\nпринять invite] as AcceptInvite
+  [POST /api/users/save|update] as SaveUser
+  [POST /api/users/archive|restore] as UserArchive
+}
+
+package "Task and project commands" as TaskApi #EDE9FE {
+  [POST /api/tasks/save] as TaskSave
+  [POST /api/tasks/delete] as TaskDelete
+  [POST /api/tasks/reorder] as TaskReorder
+  [POST /api/epics/save] as EpicSave
+  [POST /api/epics/delete] as EpicDelete
+}
+
+package "Finance commands" as FinanceApi #FFE4E6 {
+  [POST /api/accounts/save] as AccountSave
+  [POST /api/transactions/save] as TxSave
+  [POST /api/goals/save] as GoalSave
+  [POST /api/budgets/save] as BudgetSave
+  [POST /api/savings-goals/save] as SavingsSave
+  [POST /api/contributions/save] as ContributionSave
+  [POST /api/subscriptions/save] as SubscriptionSave
+}
+
+package "Collaboration and rewards" as CollaborationApi #F0FDF4 {
+  [POST /api/notes/save|delete] as Notes
+  [POST /api/reward-logs/save] as RewardLogs
+  [POST /api/inventory/save] as Inventory
+  [POST /api/batch\ncompound update] as Batch
+}
+
+package "AI helpers" as AiApi #FAE8FF {
+  [POST /api/ai/task-breakdown] as TaskAi
+  [POST /api/ai/expense-analysis] as ExpenseAi
+}
+
+package "Internal operations" as InternalApi #F1F5F9 {
+  [GET /api/internal/metrics\nrequires internal secret] as InternalMetrics
+}
+
+[validateRequestAuth] as Auth
+[resolveRequestContext] as Context
+[assertCanWrite] as WriteCheck
+[sanitizeBatchUpdates] as BatchGuard
+[FamTrackDatabase.mutate] as Mutate
+[filterForActor] as Filter
+
+Health --> [FamTrackDatabase.health]
+AppData --> Auth
+CreateInvite --> Auth
+AcceptInvite --> Auth
+SaveUser --> Auth
+UserArchive --> Auth
+TaskSave --> Auth
+TaskDelete --> Auth
+TaskReorder --> Auth
+EpicSave --> Auth
+EpicDelete --> Auth
+AccountSave --> Auth
+TxSave --> Auth
+GoalSave --> Auth
+BudgetSave --> Auth
+SavingsSave --> Auth
+ContributionSave --> Auth
+SubscriptionSave --> Auth
+Notes --> Auth
+RewardLogs --> Auth
+Inventory --> Auth
+Batch --> Auth
+TaskAi --> Auth
+ExpenseAi --> Auth
+InternalMetrics --> Auth
+
+Auth --> Context
+Context --> WriteCheck
+WriteCheck --> Mutate
+Batch --> BatchGuard
+BatchGuard --> Mutate
+Mutate --> Filter
+AppData --> Filter
+
+legend bottom
+  Все POST, кроме invite accept special flow, возвращают либо JSON-result,
+  либо envelope {revision, data}. Revision conflict возвращает 409.
+endlegend
+
+@enduml
+

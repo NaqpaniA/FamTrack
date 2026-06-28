@@ -1,221 +1,79 @@
-# Architectural Design Record (ADR) 001: Cloud Infrastructure & Synchronization
+# ADR 001: Синхронизация, облачный контур и текущий backend
 
-**Status:** APPROVED  
-**Date:** 2024-05-22  
-**Author:** Senior Product Architect  
-**Target Feature:** Cloud Sync & Real-time Collaboration
+**Статус:** ЗАМЕНЁН ТЕКУЩИМ РЕШЕНИЕМ
+**Дата исходного решения:** 2024-05-22
+**Дата актуализации:** 2026-06-28
+**Источник актуализации:** `FamTrack@768af344db91`
 
----
+## 1. Контекст
 
-## 1. Context & Problem Statement
+Первоначальная версия FamTrack/Family OS работала как локальное однопользовательское
+приложение с `localStorage`. Это давало быстрый UX, но создавало критичные
+ограничения:
 
-Currently, **Family OS** operates as a single-player application using `localStorage`.
-**Limitations:**
-1.  **Data Silos:** Data created by one family member is invisible to others.
-2.  **Data Loss:** Clearing browser cache wipes all family data.
-3.  **Security:** No role validation; any user can switch profiles locally.
+- данные одного участника не были видны другим;
+- очистка браузера могла удалить состояние семьи;
+- роли и пользовательский выбор не были защищены сервером;
+- финансовые операции невозможно было надёжно валидировать между устройствами.
 
-**Goal:** Implement a robust backend infrastructure to enable multi-user access, real-time synchronization across devices, and secure data persistence, while maintaining the "snappy" feel of a local app.
+Исходный ADR предлагал Supabase как BaaS-платформу с PostgreSQL, Realtime и
+Edge Functions. Это решение остаётся историческим контекстом, но фактический
+путь реализации сейчас другой.
 
----
+## 2. Текущее решение
 
-## 2. Decision: Supabase (BaaS)
+Текущий As-Is:
 
-We will utilize **Supabase** as the backend infrastructure.
+- React/Vite frontend.
+- TypeScript HTTP backend на Node.js.
+- SQLite через `sql.js`.
+- Telegram Web App `initData` как primary authentication input.
+- Multi-family tenant model через `families` и `family_id`.
+- Optimistic concurrency через `families.revision`.
+- Role-based filtering и write checks на backend.
+- Telegram agent и MCP bridge ходят через тот же HTTP API.
 
-### Justification
-1.  **PostgreSQL:** Essential for financial data integrity (ACID transactions).
-2.  **Realtime:** Built-in WebSocket support (Postgres Changes) allows instant UI updates without writing a custom socket server.
-3.  **Auth:** Seamless integration with Telegram Web App (TWA) authentication.
-4.  **Speed:** Drastically reduces boilerplate code compared to a custom Go/Node.js backend.
+## 3. Причина отклонения Supabase-варианта
 
-### Tech Stack Updates
-*   **Database:** PostgreSQL 15+ (Managed by Supabase).
-*   **API Client:** `@supabase/supabase-js`.
-*   **State Management:** Migrate from raw `useAppStore` to **TanStack Query (React Query)** for server state management + Optimistic Updates.
-*   **Auth:** Telegram `initData` signature validation via Edge Functions.
+Supabase остаётся допустимым future option, но текущий контур выбран из-за:
 
----
+- меньшей сложности самостоятельного backend-контура;
+- отсутствия внешнего managed data store для семейных данных;
+- прямого контроля над backup/migration process;
+- простого Docker deployment;
+- прямого контроля над backend-контуром.
 
-## 3. Data Architecture (Schema Design)
+## 4. Компромиссы текущего решения
 
-We need to migrate the loose JSON structure to strict SQL tables with Row Level Security (RLS).
+Плюсы:
 
-### Entity Relationship Diagram (Textual)
+- минимальная инфраструктурная сложность;
+- единый backend enforcement layer;
+- простая SQLite backup story;
+- прозрачный код миграций и RBAC;
+- отсутствие public unauthenticated metrics endpoint.
 
-All tables must have a `family_id` column to enforce multi-tenancy.
+Минусы:
 
-```sql
--- 1. FAMILIES (Tenancy Unit)
-create table families (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  created_at timestamptz default now()
-);
+- нет realtime push между устройствами;
+- aggregate-style writes могут быть крупнее, чем granular commands;
+- SQLite file требует аккуратных backup и migration процедур;
+- application-level references не заменяют полноценные foreign keys;
+- масштабирование потребует пересмотра persistence layer.
 
--- 2. USERS (Profiles)
-create table profiles (
-  id uuid primary key references auth.users(id), -- Links to Supabase Auth
-  family_id uuid references families(id),
-  telegram_id bigint unique,
-  username text,
-  full_name text,
-  avatar text,
-  role text check (role in ('OWNER', 'ADMIN', 'CHILD')),
-  xp integer default 0,
-  level integer default 1
-);
+## 5. Актуальные требования
 
--- 3. ACCOUNTS (Finance)
-create table accounts (
-  id uuid primary key default gen_random_uuid(),
-  family_id uuid references families(id),
-  name text not null,
-  balance bigint default 0, -- Stored in cents
-  type text check (type in ('CARD', 'CASH', 'SAVINGS')),
-  visible_to uuid[] -- Array of user_ids who can see this
-);
+- Все доменные таблицы должны быть family-scoped.
+- Все write operations должны учитывать текущую revision.
+- Backend должен фильтровать read model под actor.
+- Client-side role checks не являются security boundary.
+- Internal metrics должны возвращать только агрегаты.
+- Документация в этой папке должна оставаться на уровне приложения и кода.
 
--- 4. TRANSACTIONS
-create table transactions (
-  id uuid primary key default gen_random_uuid(),
-  family_id uuid references families(id),
-  account_id uuid references accounts(id),
-  amount bigint not null,
-  type text check (type in ('INCOME', 'EXPENSE', 'TRANSFER')),
-  category_id text,
-  title text,
-  date timestamptz default now(),
-  created_by uuid references profiles(id)
-);
+## 6. Связанные диаграммы
 
--- 5. TASKS
-create table tasks (
-  id uuid primary key default gen_random_uuid(),
-  family_id uuid references families(id),
-  title text not null,
-  status text default 'TODO',
-  priority text,
-  points integer default 0,
-  assignee_id uuid references profiles(id),
-  epic_id uuid, -- foreign key to epics
-  due_date date,
-  is_recurring boolean default false,
-  frequency text
-);
-```
+- `diagrams/container-context.puml`
+- `diagrams/data-flows.puml`
+- `diagrams/data-lifecycle.puml`
+- `diagrams/security-rbac.puml`
 
-### Security (RLS Policies)
-
-Every table must have RLS enabled.
-*   **Select:** `auth.uid() in (select id from profiles where family_id = current_table.family_id)`
-*   **Insert/Update:** Same check.
-
----
-
-## 4. Integration Workflows
-
-### A. Authentication & Bootstrapping (Sequence Diagram)
-
-How a user logs in via Telegram and gets mapped to a family.
-
-```plantuml
-@startuml
-actor User
-participant "TWA Frontend" as Client
-participant "Supabase Edge Function" as AuthFn
-participant "Supabase DB" as DB
-
-User -> Client: Open App
-Client -> Client: Get Telegram.WebApp.initData
-Client -> AuthFn: POST /auth/telegram { initData }
-activate AuthFn
-AuthFn -> AuthFn: Validate HMAC Signature
-alt Signature Valid
-    AuthFn -> DB: Check if telegram_id exists in profiles
-    alt Profile Exists
-        DB -> AuthFn: Return User + FamilyID
-        AuthFn -> AuthFn: Generate JWT
-        AuthFn -> Client: Return Session Token
-    else New User
-        AuthFn -> DB: Create Family (if owner) or Join
-        AuthFn -> DB: Create Profile linked to Auth ID
-        AuthFn -> Client: Return New Session Token
-    end
-else Signature Invalid
-    AuthFn -> Client: 401 Unauthorized
-end
-deactivate AuthFn
-
-Client -> Client: Initialize Sync (React Query)
-@enduml
-```
-
-### B. Real-time Sync & Optimistic Updates
-
-How we ensure the UI feels instant even on bad 3G networks.
-
-```plantuml
-@startuml
-actor Dad
-participant "Dad's Device" as DeviceA
-participant "Supabase" as Cloud
-participant "Mom's Device" as DeviceB
-
-Dad -> DeviceA: Creates Transaction "-500 RUB"
-activate DeviceA
-DeviceA -> DeviceA: **Optimistic Update:**\nUpdate UI Cache immediately\n(Balance decreases)
-DeviceA -> Cloud: INSERT into transactions
-activate Cloud
-
-alt Network Success
-    Cloud -> DB: Commit Transaction
-    Cloud -> DeviceA: 200 OK (Ack)
-    Cloud -> DeviceB: **WebSocket Event:**\nINSERT transactions table
-    activate DeviceB
-    DeviceB -> DeviceB: Invalidate Query Cache
-    DeviceB -> DeviceB: Refetch / Update UI
-    deactivate DeviceB
-else Network Fail
-    DeviceA -> DeviceA: **Rollback:**\nRevert UI change\nShow Toast "Connection Failed"
-end
-
-deactivate Cloud
-deactivate DeviceA
-@enduml
-```
-
----
-
-## 5. Implementation Guide for Developers
-
-### Phase 1: Client-Side Preparation
-1.  **Replace ID Generation:** Stop using `Math.random()`. Use `uuid` library (v4) on frontend. This allows generating IDs locally that are valid in Postgres.
-2.  **API Layer Abstraction:** Create a `services/api.ts` file.
-    *   Move all logic from `store.ts` actions to API calls.
-    *   Example: `actions.finance.saveTransaction` -> `api.transactions.create(data)`.
-3.  **React Query Setup:**
-    *   Wrap `App` in `QueryClientProvider`.
-    *   Create hooks: `useTasks()`, `useTransactions()`.
-    *   Implement `useMutation` with `onMutate` for optimistic updates.
-
-### Phase 2: Backend Setup
-1.  Initialize Supabase project.
-2.  Run SQL migration scripts (Schema defined in Section 3).
-3.  Deploy Edge Function for Telegram Auth.
-
-### Phase 3: Data Migration
-1.  On first launch with new version, check `localStorage`.
-2.  If data exists AND user is logged in:
-    *   Show "Syncing your data..." loader.
-    *   Bulk insert local data into Supabase.
-    *   Clear `localStorage` (or mark as migrated).
-
----
-
-## 6. Definition of Done (DoD)
-*   [ ] User can login via Telegram.
-*   [ ] User A creates a task, User B sees it appear instantly (<1s) without refresh.
-*   [ ] RLS prevents User A from seeing User C's family data.
-*   [ ] App works (read-only) if internet is disconnected, syncs on reconnect.
-*   [ ] "Finance" totals match exactly across devices.

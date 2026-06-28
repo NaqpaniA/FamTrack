@@ -1,0 +1,89 @@
+@startuml
+title
+FamTrack - контекст и контейнеры
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam roundcorner 12
+skinparam defaultFontName "DejaVu Sans"
+skinparam ArrowColor #475569
+skinparam actor {
+  BackgroundColor #FEF3C7
+  BorderColor #B45309
+}
+skinparam rectangle {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+skinparam component {
+  BackgroundColor #EEF2FF
+  BorderColor #4338CA
+}
+skinparam database {
+  BackgroundColor #FFF7ED
+  BorderColor #C2410C
+}
+skinparam cloud {
+  BackgroundColor #ECFEFF
+  BorderColor #0E7490
+}
+
+actor "Участник семьи" as FamilyMember
+actor "Владелец семьи" as FamilyOwner
+actor "Пользователь инструментов" as ToolUser
+actor "Внутренний мониторинг" as MonitoringUser
+
+cloud "Платформа Telegram" as Telegram {
+  component "Mini App WebView" as WebView
+  component "Bot API" as BotApi
+}
+
+rectangle "Граница приложения FamTrack" as AppBoundary {
+  component "React/Vite Mini App\nэкраны, store, React Query" as Frontend #E0F2FE
+  component "TypeScript HTTP Backend\nrouting, auth, RBAC, metrics" as Backend #EDE9FE
+  database "SQLite через sql.js\nсемейные данные и revision" as SQLite
+  component "Telegram Agent\nlong polling, команды семьи" as Agent #DCFCE7
+  component "MCP Bridge\nstdio tools через HTTP API" as MCP #DCFCE7
+}
+
+rectangle "Локальная разработка" as LocalDev {
+  component "LocalStorage fallback\nтолько localhost dev" as LocalFallback #FEF9C3
+}
+
+component "Aggregate metrics collector" as Collector #F1F5F9
+
+FamilyMember --> WebView : открывает Mini App
+FamilyOwner --> WebView : управляет семьёй и invite
+WebView --> Frontend : initData, themeParams, haptics
+Frontend --> Backend : /api/* + X-Telegram-Init-Data
+Backend --> SQLite : миграции, чтение, транзакционные мутации
+
+BotApi <--> Agent : getUpdates/sendMessage
+Agent --> Backend : те же API-контракты и RBAC
+
+ToolUser --> MCP : tool call
+MCP --> Backend : signed actor context + revision
+
+MonitoringUser --> Collector : scrape/status pipeline
+Collector --> Backend : /api/health и /api/internal/metrics
+
+Frontend ..> LocalFallback : fallback при недоступном localhost API
+
+legend right
+  |= Цвет |= Смысл |
+  |<#E0F2FE>| Клиентский слой |
+  |<#EDE9FE>| Backend enforcement |
+  |<#FFF7ED>| Persisted data |
+  |<#DCFCE7>| Tool/agent integrations |
+  |<#FEF9C3>| Только локальная разработка |
+endlegend
+
+note bottom of AppBoundary
+Диаграмма показывает только прикладные границы FamTrack.
+end note
+
+@enduml
+

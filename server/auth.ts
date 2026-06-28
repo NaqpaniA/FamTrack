@@ -12,6 +12,8 @@ export interface AuthConfig {
     botToken?: string;
     allowedTelegramIds: Set<number>;
     allowedTelegramUsernames: Set<string>;
+    developerOwnerTelegramIds?: Set<number>;
+    enforceAllowlist?: boolean;
     internalApiSecret?: string;
 }
 
@@ -35,12 +37,22 @@ export const getAuthConfig = (): AuthConfig => {
             .map(value => value.trim().replace(/^@/, '').toLowerCase())
             .filter(Boolean)
     );
+    const developerOwnerTelegramIds = new Set(
+        (process.env.FAMTRACK_OWNER_TELEGRAM_IDS || '')
+            .split(',')
+            .map(value => value.trim())
+            .filter(Boolean)
+            .map(value => Number(value))
+            .filter(value => Number.isFinite(value))
+    );
 
     return {
         mode,
         botToken: process.env.TELEGRAM_BOT_TOKEN,
         allowedTelegramIds,
         allowedTelegramUsernames,
+        developerOwnerTelegramIds,
+        enforceAllowlist: process.env.FAMTRACK_REQUIRE_ALLOWLIST === '1',
         internalApiSecret: process.env.FAMTRACK_INTERNAL_API_SECRET
     };
 };
@@ -71,7 +83,7 @@ export const validateRequestAuth = (
     const allowedById = config.allowedTelegramIds.size > 0 && config.allowedTelegramIds.has(telegramId);
     const allowedByUsername = !!username && config.allowedTelegramUsernames.has(username);
 
-    if (!allowedById && !allowedByUsername) {
+    if (config.enforceAllowlist && !allowedById && !allowedByUsername) {
         console.warn('FamTrack auth rejected Telegram user', JSON.stringify({
             telegramId,
             username,

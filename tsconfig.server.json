@@ -22,6 +22,7 @@
     "finance.model.ts",
     "family.model.ts",
     "shopping.model.ts",
-    "events.model.ts"
+    "events.model.ts",
+    "notes.model.ts"
   ]
 }

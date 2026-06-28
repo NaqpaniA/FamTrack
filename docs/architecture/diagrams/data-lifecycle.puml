@@ -1,0 +1,88 @@
+@startuml
+title
+FamTrack - жизненный цикл БД, миграций и revision
+Дата: 2026-06-28
+Источник: FamTrack@768af344db91
+end title
+footer Построено по текущему worktree, включая незакоммиченные изменения
+
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam roundcorner 10
+skinparam activity {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+}
+
+start
+
+partition "Startup: FamTrackDatabase.open()" {
+  :Найти sql.js wasm/runtime;
+  :Создать директорию dbPath;
+  if (SQLite file exists?) then (да)
+    :Скопировать file в backup\nс timestamp suffix;
+    :Открыть SQLite из bytes;
+  else (нет)
+    :Создать новую SQLite database;
+  endif
+
+  :createSchema();
+  :ensureLegacyFamilyIds();
+  :ensureBudgetsSchema();
+  :addColumnIfMissing(tasks.sort_order);
+  :legacy demo cleanup migrations;
+  :INSERT schema_migrations текущей версии;
+
+  if (family has users?) then (да)
+    :Не seed-ить initial data;
+  else (нет)
+    :insert default family;
+    :replaceFamilyData(initial data);
+    :set revision = 1;
+  endif
+
+  :validateMigration();
+  if (validation ok?) then (да)
+    :persist exported DB bytes;
+  else (нет)
+    :startup failure;
+    stop
+  endif
+}
+
+partition "Read path" {
+  :resolve familyId from actor;
+  :SELECT family row;
+  :SELECT all family-scoped tables;
+  :rowTo* mappers build AppData;
+  :filterForActor before response;
+}
+
+partition "Write path" {
+  :Получить expectedRevision от клиента;
+  :SELECT current families.revision;
+  if (expectedRevision != current?) then (conflict)
+    :throw RevisionConflictError 409;
+    stop
+  else (ok)
+    :BEGIN IMMEDIATE;
+    :getAppData(familyId, actor);
+    :apply mutator;
+    :replaceFamilyData(familyId, next);
+    :setFamilyRevision(current + 1);
+    if (mutation ok?) then (да)
+      :COMMIT;
+      :persist exported DB bytes;
+    else (нет)
+      :ROLLBACK;
+      :return error;
+      stop
+    endif
+  endif
+}
+
+:Return next envelope;
+stop
+
+@enduml
+
