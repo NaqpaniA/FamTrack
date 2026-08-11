@@ -6,7 +6,7 @@ import { TaskNotificationMode } from './settings.model';
 
 export type Priority = 'HIGH' | 'MEDIUM' | 'LOW';
 export type TaskDifficulty = 'EASY' | 'MEDIUM' | 'HARD';
-export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE';
+export type TaskStatus = 'INBOX' | 'TODO' | 'IN_PROGRESS' | 'BLOCKED' | 'WAITING' | 'DONE' | 'DROPPED';
 export type Frequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
 
 export interface SubTask {
@@ -38,6 +38,15 @@ export interface Task {
   completedAt?: number;
   completedById?: string;
   rewardedAt?: number;
+  capturedAt?: number;
+  nextAction?: string;
+  estimateMinutes?: number;
+  dependsOnIds?: string[];
+  routineTemplateId?: string;
+  routineOccurrenceKey?: string;
+  routineDueAt?: number;
+  routineUnits?: number;
+  routineRewardedUnits?: number;
 }
 
 export interface Epic {

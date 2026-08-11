@@ -96,12 +96,15 @@ export const changeTaskStatus = (
     clock: Clock = Date.now,
     idFactory: IdFactory = randomUUID
 ): AppData => {
-    const validStatuses = new Set<TaskStatus>(['TODO', 'IN_PROGRESS', 'DONE']);
+    const validStatuses = new Set<TaskStatus>(['INBOX', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'DONE', 'DROPPED']);
     if (!command.taskId || !validStatuses.has(command.status)) {
         throw new DomainError('A valid task id and status are required');
     }
     const task = data.tasks.find(item => item.id === command.taskId);
     if (!task) throw new DomainError('Task not found', 404);
+    if (task.routineTemplateId) {
+        throw new DomainError('Routine tasks must use the routine completion or skip command', 409);
+    }
 
     const isCompleting = command.status === 'DONE' && task.status !== 'DONE';
     const creditedUserId = task.assigneeId || actor.id;
@@ -220,6 +223,9 @@ export const normalizeTaskForSave = (
     if (!isObject(rawTask)) throw new DomainError('Task payload is required');
     const rawId = typeof rawTask.id === 'string' ? rawTask.id.trim() : '';
     const previous = rawId ? data.tasks.find(task => task.id === rawId) : undefined;
+    if (previous?.routineTemplateId) {
+        throw new DomainError('Routine tasks are edited through their routine template', 409);
+    }
     const memberIds = new Set(data.members.filter(member => member.isActive !== false).map(member => member.id));
     const title = normalizeString(rawTask.title, previous?.title || '', 180);
     if (!title) throw new DomainError('Task title is required');
@@ -251,12 +257,24 @@ export const normalizeTaskForSave = (
             isCompleted: item.isCompleted === true
         }))
         : previous?.subtasks || [];
+    const taskIds = new Set(data.tasks.map(task => task.id));
+    const dependsOnIds = Array.isArray(rawTask.dependsOnIds)
+        ? [...new Set(rawTask.dependsOnIds.filter((id): id is string => typeof id === 'string' && id !== rawId && taskIds.has(id)))]
+        : previous?.dependsOnIds || [];
+    const requestedStatus: TaskStatus | undefined = rawTask.status === 'INBOX'
+        || rawTask.status === 'TODO'
+        || rawTask.status === 'IN_PROGRESS'
+        || rawTask.status === 'BLOCKED'
+        || rawTask.status === 'WAITING'
+        || rawTask.status === 'DROPPED'
+        ? rawTask.status
+        : undefined;
 
     return {
         id: previous?.id || rawId || `task-${idFactory()}`,
         title,
         description: normalizeOptionalString(rawTask.description, 6000),
-        status: previous?.status || 'TODO',
+        status: previous?.status || requestedStatus || 'TODO',
         priority,
         difficulty,
         points: calculateTaskXp(difficulty, priority),
@@ -276,7 +294,13 @@ export const normalizeTaskForSave = (
         notificationMode,
         completedAt: previous?.completedAt,
         completedById: previous?.completedById,
-        rewardedAt: previous?.rewardedAt
+        rewardedAt: previous?.rewardedAt,
+        capturedAt: previous?.capturedAt || clampInteger(rawTask.capturedAt, clock(), 0, Number.MAX_SAFE_INTEGER),
+        nextAction: normalizeOptionalString(rawTask.nextAction, 500),
+        estimateMinutes: rawTask.estimateMinutes == null
+            ? previous?.estimateMinutes
+            : clampInteger(rawTask.estimateMinutes, previous?.estimateMinutes || 0, 0, 100_000),
+        dependsOnIds
     };
 };
 

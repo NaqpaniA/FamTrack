@@ -174,6 +174,35 @@ test('task XP is derived from difficulty and priority and cannot be forged by a 
     }
 });
 
+test('inbox hints, estimates and dependencies are normalized without blocking work', () => {
+    const data = cloneData();
+    const actor = data.members[0];
+    data.tasks = [
+        { ...data.tasks[0], id: 'dependency', status: 'TODO' },
+        { ...data.tasks[0], id: 'completed-dependency', status: 'DONE' }
+    ];
+    const normalized = normalizeTaskForSave(data, {
+        id: 'captured-task',
+        title: 'Captured',
+        status: 'INBOX',
+        nextAction: '  Позвонить мастеру  ',
+        estimateMinutes: 25.9,
+        dependsOnIds: ['dependency', 'dependency', 'missing', 'captured-task']
+    }, actor, () => 123, ids());
+
+    assert.equal(normalized.status, 'INBOX');
+    assert.equal(normalized.capturedAt, 123);
+    assert.equal(normalized.nextAction, 'Позвонить мастеру');
+    assert.equal(normalized.estimateMinutes, 26);
+    assert.deepEqual(normalized.dependsOnIds, ['dependency']);
+
+    const started = changeTaskStatus({ ...data, tasks: [...data.tasks, normalized] }, {
+        taskId: normalized.id,
+        status: 'IN_PROGRESS'
+    }, actor, () => 200, ids());
+    assert.equal(started.tasks.find(task => task.id === normalized.id)?.status, 'IN_PROGRESS');
+});
+
 test('financial transaction edits reverse the previous effect before applying the new one', () => {
     const data = cloneData();
     const actor = data.members[0];

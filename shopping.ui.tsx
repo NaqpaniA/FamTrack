@@ -15,22 +15,27 @@ import { ShoppingItem, SHOPPING_CATEGORIES, ShoppingCategoryType } from './shopp
 import { formatMoney, isVisible } from './utils';
 import { Modal, Panel, Screen } from './ui-kit';
 
+const PantryView = React.lazy(() => import('./pantry.ui').then(module => ({ default: module.PantryView })));
+
 export const ShoppingScreen = ({ 
     data, 
     onAddItem, 
     onToggleItem, 
     onDeleteItem, 
-    onCheckout 
+    onCheckout,
+    onAdjustPantry
 }: { 
     data: AppData, 
     onAddItem: (title: string, category: ShoppingCategoryType) => void,
     onToggleItem: (id: string) => void,
     onDeleteItem: (id: string) => void,
-    onCheckout: (amount: number, accountId: string) => void
+    onCheckout: (amount: number, accountId: string) => void,
+    onAdjustPantry: (input: Parameters<typeof import('./api').api.adjustPantry>[0]) => void
 }) => {
     const [newItemTitle, setNewItemTitle] = useState('');
     const [selectedCategory, setSelectedCategory] = useState<ShoppingCategoryType>('FOOD');
     const [isCheckoutOpen, setCheckoutOpen] = useState(false);
+    const [mode, setMode] = useState<'SHOPPING' | 'PANTRY'>('SHOPPING');
     
     const items = data.shoppingList || [];
     const activeItems = items.filter(i => !i.isCompleted);
@@ -46,12 +51,26 @@ export const ShoppingScreen = ({
         <Screen className="flex flex-col">
             <div className="flex items-center justify-between">
                 <h1 className="text-[24px] leading-tight font-bold flex items-center gap-2">
-                    <ShoppingBag className="text-blue-500" size={22} /> Список
+                    <ShoppingBag className="text-blue-500" size={22} /> {mode === 'SHOPPING' ? 'Список' : 'Запасы'}
                 </h1>
                 <div className="text-[13px] text-gray-400 font-medium">
-                    {activeItems.length} осталось
+                    {mode === 'SHOPPING' ? `${activeItems.length} осталось` : `${data.pantry?.totalProducts || 0} позиций`}
                 </div>
             </div>
+
+            {data.capabilities?.pantry ? (
+                <div className="grid grid-cols-2 rounded-full bg-black/5 p-1">
+                    <button type="button" onClick={() => setMode('SHOPPING')} aria-pressed={mode === 'SHOPPING'} className={`min-h-10 rounded-full text-xs font-black ${mode === 'SHOPPING' ? 'bg-white shadow-sm' : 'text-gray-500'}`}>Купить</button>
+                    <button type="button" onClick={() => setMode('PANTRY')} aria-pressed={mode === 'PANTRY'} className={`min-h-10 rounded-full text-xs font-black ${mode === 'PANTRY' ? 'bg-white shadow-sm' : 'text-gray-500'}`}>Запасы</button>
+                </div>
+            ) : null}
+
+            {mode === 'PANTRY' && data.capabilities?.pantry ? (
+                <React.Suspense fallback={<div className="h-40 animate-pulse rounded-[20px] bg-black/5" />}>
+                    <PantryView data={data} onAdjust={onAdjustPantry} />
+                </React.Suspense>
+            ) : (
+                <>
 
             {/* Input Area */}
             <Panel className="p-3">
@@ -151,6 +170,8 @@ export const ShoppingScreen = ({
                 accounts={data.accounts.filter(a => isVisible(a, data.currentUser))}
                 onConfirm={onCheckout}
             />
+                </>
+            )}
         </Screen>
     );
 };

@@ -16,6 +16,13 @@ import { formatMoney, isVisible } from './utils';
 import { isOverdue, isToday } from './tasks.model';
 import { EVENT_CONFIG } from './events.model';
 import { NotesWidget } from './notes.ui';
+import type { DashboardPreferences } from './types';
+import type { RoutineTemplate } from './routines.model';
+import type { Wishlist, WishlistItem } from './wishlist.model';
+
+const HouseholdDashboard = React.lazy(() => import('./household.ui').then(module => ({
+    default: module.HouseholdDashboard
+})));
 
 const EPIC_COLOR_CLASSES: Record<string, string> = {
     'bg-blue-500': 'bg-blue-500',
@@ -39,7 +46,8 @@ export const DashboardScreen = ({
     onAddEpic,
     onOpenProfile,
     onOpenNotes,
-    onAddNote
+    onAddNote,
+    householdActions
 }: { 
     data: AppData, 
     onTaskClick: (t: Task) => void,
@@ -48,7 +56,19 @@ export const DashboardScreen = ({
     onAddEpic: () => void,
     onOpenProfile: () => void,
     onOpenNotes: () => void,
-    onAddNote: () => void
+    onAddNote: () => void,
+    householdActions: {
+        saveRoutine: (routine: Partial<RoutineTemplate> & { presetId?: string }) => void;
+        pauseRoutine: (routineId: string, paused: boolean) => void;
+        completeRoutine: (routineId: string, taskId?: string, units?: number) => void;
+        recordRoutineUnit: (routineId: string, units?: number) => void;
+        skipRoutine: (routineId: string) => void;
+        savePreferences: (preferences: Partial<DashboardPreferences>) => void;
+        saveWishlist: (wishlist: Partial<Wishlist>) => void;
+        saveWishlistItem: (item: Partial<WishlistItem> & { wishlistId: string }) => void;
+        deleteWishlistItem: (wishlistId: string, itemId: string) => void;
+        reserveWishlistItem: (wishlistId: string, itemId: string, reserved: boolean) => void;
+    }
 }) => {
     const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser));
     const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser));
@@ -124,6 +144,12 @@ export const DashboardScreen = ({
                     </div>
                 </button>
             </div>
+
+            {data.capabilities?.routines ? (
+                <React.Suspense fallback={<div className="h-32 animate-pulse rounded-[20px] bg-black/5" aria-label="Загружаю Household Pulse" />}>
+                    <HouseholdDashboard data={data} actions={householdActions} />
+                </React.Suspense>
+            ) : null}
 
             <NotesWidget data={data} onOpenAll={onOpenNotes} onCreate={onAddNote} />
 

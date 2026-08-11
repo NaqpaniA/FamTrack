@@ -1,6 +1,6 @@
 
 import { useState } from 'react';
-import { AppData, FamilySettings, ToastMessage, TaskStatus } from './types';
+import { AppData, DashboardPreferences, FamilySettings, ToastMessage, TaskStatus } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, Subscription } from './finance.model';
 import { User, Reward, InventoryItem, calculateStreakBonus } from './family.model';
@@ -8,6 +8,8 @@ import { ShoppingCategoryType } from './shopping.model';
 import { Note } from './notes.model';
 import { TWA, generateId } from './utils';
 import { useFamilyData, useMutations } from './queries';
+import type { RoutineTemplate } from './routines.model';
+import type { Wishlist, WishlistItem } from './wishlist.model';
 
 const EMPTY_DATA: AppData = {
   currentUser: {
@@ -364,6 +366,79 @@ export const useAppStore = () => {
       });
   };
 
+  const mutationError = (fallback: string) => (error: unknown) => (
+      addToast(error instanceof Error ? error.message : fallback, 'ERROR')
+  );
+
+  const saveRoutine = (routine: Partial<RoutineTemplate> & { presetId?: string }) => {
+      mutations.saveRoutine.mutate(routine, {
+          onSuccess: () => addToast('Рутина сохранена', 'SUCCESS'),
+          onError: mutationError('Не удалось сохранить рутину')
+      });
+      TWA.haptic('light');
+  };
+
+  const pauseRoutine = (routineId: string, paused: boolean) => {
+      mutations.pauseRoutine.mutate({ routineId, paused }, {
+          onSuccess: () => addToast(paused ? 'Рутина приостановлена' : 'Рутина возобновлена', 'SUCCESS'),
+          onError: mutationError('Не удалось изменить рутину')
+      });
+  };
+
+  const completeRoutine = (routineId: string, taskId?: string, units?: number) => {
+      mutations.completeRoutine.mutate({ routineId, taskId, units }, {
+          onSuccess: () => addToast('Выполнение учтено · XP начислен', 'SUCCESS'),
+          onError: mutationError('Не удалось завершить рутину')
+      });
+      TWA.notification('success');
+  };
+
+  const recordRoutineUnit = (routineId: string, units = 1) => {
+      mutations.recordRoutineUnit.mutate({ routineId, units }, {
+          onError: mutationError('Не удалось добавить единицу')
+      });
+      TWA.selection();
+  };
+
+  const skipRoutine = (routineId: string) => {
+      mutations.skipRoutine.mutate(routineId, {
+          onSuccess: () => addToast('Период пропущен без XP', 'INFO'),
+          onError: mutationError('Не удалось пропустить выполнение')
+      });
+  };
+
+  const saveDashboardPreferences = (preferences: Partial<DashboardPreferences>) => {
+      mutations.saveDashboardPreferences.mutate(preferences, {
+          onError: mutationError('Не удалось сохранить вид главной')
+      });
+  };
+
+  const saveWishlist = (wishlist: Partial<Wishlist>) => {
+      mutations.saveWishlist.mutate(wishlist, { onError: mutationError('Не удалось сохранить список желаний') });
+  };
+
+  const saveWishlistItem = (item: Partial<WishlistItem> & { wishlistId: string }) => {
+      mutations.saveWishlistItem.mutate(item, {
+          onSuccess: () => addToast('Желание сохранено', 'SUCCESS'),
+          onError: mutationError('Не удалось сохранить желание')
+      });
+  };
+
+  const deleteWishlistItem = (wishlistId: string, itemId: string) => {
+      mutations.deleteWishlistItem.mutate({ wishlistId, itemId }, { onError: mutationError('Не удалось удалить желание') });
+  };
+
+  const reserveWishlistItem = (wishlistId: string, itemId: string, reserved: boolean) => {
+      mutations.reserveWishlistItem.mutate({ wishlistId, itemId, reserved }, {
+          onSuccess: () => addToast(reserved ? 'Подарок забронирован' : 'Бронь снята', 'SUCCESS'),
+          onError: mutationError('Не удалось изменить бронь')
+      });
+  };
+
+  const adjustPantry = (input: Parameters<typeof mutations.adjustPantry.mutate>[0]) => {
+      mutations.adjustPantry.mutate(input, { onError: mutationError('Не удалось обновить запасы') });
+  };
+
   return {
     data,
     isLoading,
@@ -393,7 +468,10 @@ export const useAppStore = () => {
         buyReward,
         consumeItem
       },
-      shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList }
+      shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList },
+      routines: { save: saveRoutine, pause: pauseRoutine, complete: completeRoutine, recordUnit: recordRoutineUnit, skip: skipRoutine, savePreferences: saveDashboardPreferences },
+      wishlists: { save: saveWishlist, saveItem: saveWishlistItem, deleteItem: deleteWishlistItem, reserve: reserveWishlistItem },
+      pantry: { adjust: adjustPantry }
     }
   };
 };

@@ -23,6 +23,8 @@
     "family.model.ts",
     "shopping.model.ts",
     "events.model.ts",
-    "notes.model.ts"
+    "notes.model.ts",
+    "outbox.ts",
+    "barcode.ts"
   ]
 }

@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { performance } from 'node:perf_hooks';
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import { INITIAL_DATA } from '../data.js';
-import type { AiHelperType, AiUsage, AppData, Family, FamilyInvite } from '../types.js';
+import type { AiHelperType, AiUsage, AppData, DashboardPreferences, Family, FamilyInvite } from '../types.js';
 import type { User, Role } from '../family.model.js';
 import type { Task, Epic } from '../tasks.model.js';
 import type {
@@ -22,6 +23,11 @@ import type { AppEvent } from '../events.model.js';
 import type { Note } from '../notes.model.js';
 import type { AuthContext } from './auth.js';
 import { DEFAULT_FAMILY_SETTINGS, normalizeFamilySettings } from '../settings.model.js';
+import type { RoutineEvent, RoutineTemplate } from '../routines.model.js';
+import type { Wishlist } from '../wishlist.model.js';
+import type { PantryMovement, PantryProduct } from '../pantry.model.js';
+import type { PurchaseImportFile, PurchaseImportItem, PurchaseImportJob } from '../purchase-import.model.js';
+import { summarizeRoutines } from './routines.js';
 
 const require = createRequire(import.meta.url);
 
@@ -29,7 +35,7 @@ type Row = Record<string, unknown>;
 
 export const DEFAULT_FAMILY_ID = 'fam-default';
 const DEFAULT_FAMILY_NAME = 'Naqpania Family';
-const MIGRATION_VERSION = '2026-08-11-concurrent-sync-and-xp-v2';
+const MIGRATION_VERSION = '2026-08-11-routines-pantry-capture-v1';
 const DEMO_PLAYSTATION_CLEANUP_MIGRATION = '2026-06-19-remove-demo-playstation-savings-goal';
 const MUTATION_RECEIPT_RETENTION_MS = 1000 * 60 * 60 * 24 * 30;
 const DEMO_PLAYSTATION_SAVINGS_GOAL = {
@@ -43,6 +49,15 @@ const DEMO_PLAYSTATION_SAVINGS_GOAL = {
 };
 
 const TENANT_TABLES = [
+    'purchase_import_files',
+    'purchase_import_items',
+    'purchase_imports',
+    'pantry_movements',
+    'pantry_products',
+    'user_preferences',
+    'wishlists',
+    'routine_events',
+    'routine_templates',
     'events',
     'notes',
     'shopping_items',
@@ -61,6 +76,108 @@ const TENANT_TABLES = [
     'users'
 ] as const;
 
+export type FamilyWriteTarget =
+    | 'family'
+    | 'members'
+    | 'epics'
+    | 'tasks'
+    | 'accounts'
+    | 'goals'
+    | 'savingsGoals'
+    | 'contributions'
+    | 'subscriptions'
+    | 'budgets'
+    | 'transactions'
+    | 'rewards'
+    | 'rewardLogs'
+    | 'inventory'
+    | 'shoppingList'
+    | 'notes'
+    | 'events'
+    | 'routines'
+    | 'routineEvents'
+    | 'wishlists'
+    | 'dashboardPreferences'
+    | 'pantry'
+    | 'purchaseImports';
+
+const ALL_FAMILY_WRITE_TARGETS: readonly FamilyWriteTarget[] = [
+    'family', 'members', 'epics', 'tasks', 'accounts', 'goals', 'savingsGoals',
+    'contributions', 'subscriptions', 'budgets', 'transactions', 'rewards',
+    'rewardLogs', 'inventory', 'shoppingList', 'notes', 'events', 'routines',
+    'routineEvents', 'wishlists', 'dashboardPreferences', 'pantry', 'purchaseImports'
+];
+
+const COMMAND_WRITE_TARGETS: Record<string, readonly FamilyWriteTarget[]> = {
+    '/api/tasks/reorder': ['tasks'],
+    '/api/tasks/status': ['tasks', 'members', 'rewardLogs', 'events'],
+    '/api/tasks/save': ['tasks'],
+    '/api/tasks/delete': ['tasks'],
+    '/api/notes/save': ['notes', 'events'],
+    '/api/notes/delete': ['notes'],
+    '/api/epics/save': ['epics'],
+    '/api/epics/delete': ['epics'],
+    '/api/transactions/save': ['accounts', 'goals', 'transactions', 'events'],
+    '/api/accounts/save': ['accounts', 'goals'],
+    '/api/goals/save': ['goals'],
+    '/api/budgets/save': ['budgets'],
+    '/api/savings-goals/save': ['savingsGoals'],
+    '/api/savings-goals/contribute': ['accounts', 'savingsGoals', 'contributions', 'transactions', 'events'],
+    '/api/subscriptions/save': ['subscriptions'],
+    '/api/subscriptions/delete': ['subscriptions'],
+    '/api/subscriptions/pay': ['accounts', 'subscriptions', 'transactions', 'events'],
+    '/api/shopping/items/add': ['shoppingList'],
+    '/api/shopping/items/set-completed': ['shoppingList'],
+    '/api/shopping/items/delete': ['shoppingList'],
+    '/api/shopping/checkout': ['accounts', 'transactions', 'shoppingList', 'events'],
+    '/api/users/save': ['family', 'members'],
+    '/api/users/archive': ['family', 'members'],
+    '/api/users/restore': ['family', 'members'],
+    '/api/users/check-in': ['members', 'rewardLogs', 'events'],
+    '/api/family/settings': ['family'],
+    '/api/rewards/save': ['rewards'],
+    '/api/rewards/archive': ['rewards'],
+    '/api/rewards/purchase': ['members', 'rewardLogs', 'inventory', 'events'],
+    '/api/rewards/use': ['rewardLogs', 'inventory', 'events'],
+    '/api/routines/save': ['tasks', 'routines', 'routineEvents'],
+    '/api/routines/pause': ['tasks', 'routines', 'routineEvents'],
+    '/api/routines/complete': ['tasks', 'members', 'rewardLogs', 'routines', 'routineEvents'],
+    '/api/routines/record-unit': ['tasks', 'routines', 'routineEvents'],
+    '/api/routines/skip': ['tasks', 'routines', 'routineEvents'],
+    '/api/users/preferences': ['dashboardPreferences'],
+    '/api/wishlists/save': ['wishlists'],
+    '/api/wishlists/items/save': ['wishlists'],
+    '/api/wishlists/items/delete': ['wishlists'],
+    '/api/wishlists/items/reserve': ['wishlists'],
+    '/api/wishlists/items/release': ['wishlists'],
+    '/api/pantry/adjust': ['pantry'],
+    '/api/purchase-imports': ['purchaseImports'],
+    '/api/purchase-imports/update': ['purchaseImports'],
+    '/api/purchase-imports/barcodes': ['purchaseImports'],
+    '/api/purchase-imports/items/save': ['purchaseImports'],
+    '/api/purchase-imports/confirm': ['accounts', 'goals', 'transactions', 'shoppingList', 'events', 'pantry', 'purchaseImports']
+};
+
+const commandWriteTargets = (operation: string) => {
+    if (/^\/api\/pantry\/[^/]+\/adjust$/.test(operation)) return ['pantry'] as const;
+    if (/^\/api\/purchase-imports\/[^/]+\/barcodes$/.test(operation)) return ['purchaseImports'] as const;
+    if (/^\/api\/purchase-imports\/[^/]+$/.test(operation)) return ['purchaseImports'] as const;
+    if (/^\/api\/purchase-imports\/[^/]+\/items\/[^/]+$/.test(operation)) return ['purchaseImports'] as const;
+    if (/^\/api\/purchase-imports\/[^/]+\/files\/[1-3]$/.test(operation)) return ['purchaseImports'] as const;
+    if (/^\/api\/purchase-imports\/[^/]+\/(?:process|cancel)$/.test(operation)) return ['purchaseImports'] as const;
+    if (/^\/api\/internal\/purchase-imports\/[^/]+\/(?:claim|result|failure|recover|retry|retention)$/.test(operation)) return ['purchaseImports'] as const;
+    if (/^\/api\/purchase-imports\/[^/]+\/confirm$/.test(operation)) {
+        return ['accounts', 'goals', 'transactions', 'shoppingList', 'events', 'pantry', 'purchaseImports'] as const;
+    }
+    return COMMAND_WRITE_TARGETS[operation];
+};
+
+const percentile95 = (values: number[]) => {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((left, right) => left - right);
+    return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+};
+
 const boolToInt = (value?: boolean) => value ? 1 : 0;
 const activeToInt = (value?: boolean) => value === false ? 0 : 1;
 const intToBool = (value: unknown) => Number(value) === 1;
@@ -74,6 +191,11 @@ const parseJson = <T>(value: unknown, fallback: T): T => {
     } catch {
         return fallback;
     }
+};
+const safeIsoClock = (value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) return undefined;
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(11, 16) : undefined;
 };
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -130,6 +252,14 @@ export class InviteError extends Error {
 }
 
 export class FamTrackDatabase {
+    private readonly operationMetrics = {
+        commandRebased: 0,
+        commandDuplicate: 0,
+        persistFailure: 0,
+        persistDurationsMs: [] as number[],
+        writeDurationsMs: [] as number[]
+    };
+
     private constructor(
         private SQL: SqlJsStatic,
         private db: Database,
@@ -163,6 +293,33 @@ export class FamTrackDatabase {
             ok: true,
             revision: this.getRevision(),
             families: Number(this.selectValue('SELECT COUNT(*) FROM families') || 0)
+        };
+    }
+
+    operationalMetrics() {
+        const persistDurations = this.operationMetrics.persistDurationsMs;
+        const writeDurations = this.operationMetrics.writeDurationsMs;
+        let databaseSizeBytes = 0;
+        try {
+            databaseSizeBytes = fs.statSync(this.dbPath).size;
+        } catch {
+            databaseSizeBytes = this.db.export().byteLength;
+        }
+        return {
+            command_rebased: this.operationMetrics.commandRebased,
+            command_duplicate: this.operationMetrics.commandDuplicate,
+            persist_failure: this.operationMetrics.persistFailure,
+            persist_duration: {
+                count: persistDurations.length,
+                latestMs: persistDurations.at(-1) || 0,
+                p95Ms: percentile95(persistDurations)
+            },
+            write_latency: {
+                count: writeDurations.length,
+                latestMs: writeDurations.at(-1) || 0,
+                p95Ms: percentile95(writeDurations)
+            },
+            database_size_bytes: databaseSizeBytes
         };
     }
 
@@ -262,7 +419,54 @@ export class FamTrackDatabase {
             || members[0]
             || cloneInitialData().currentUser;
 
-        return {
+        const routines = this.selectRows('SELECT data_json FROM routine_templates WHERE family_id = ? ORDER BY rowid', [familyId])
+            .map(row => parseJson<RoutineTemplate>(row.data_json, {} as RoutineTemplate))
+            .filter(item => !!item.id);
+        const routineEvents = this.selectRows('SELECT data_json FROM routine_events WHERE family_id = ? ORDER BY timestamp, rowid', [familyId])
+            .map(row => parseJson<RoutineEvent>(row.data_json, {} as RoutineEvent))
+            .filter(item => !!item.id);
+        const wishlists = this.selectRows('SELECT data_json FROM wishlists WHERE family_id = ? ORDER BY rowid', [familyId])
+            .map(row => parseJson<Wishlist>(row.data_json, {} as Wishlist))
+            .filter(item => !!item.id);
+        const preferenceRow = this.selectRows(
+            'SELECT data_json FROM user_preferences WHERE family_id = ? AND user_id = ?',
+            [familyId, currentUser.id]
+        )[0];
+        const dashboardPreferences = parseJson<DashboardPreferences>(preferenceRow?.data_json, {
+            userId: currentUser.id,
+            scope: 'FAMILY',
+            hiddenWidgets: [],
+            widgetOrder: [],
+            weatherOptIn: false
+        });
+        const pantryProducts = this.selectRows('SELECT data_json FROM pantry_products WHERE family_id = ? ORDER BY rowid', [familyId])
+            .map(row => parseJson<PantryProduct>(row.data_json, {} as PantryProduct))
+            .filter(item => !!item.id);
+        const pantryMovements = this.selectRows(
+            'SELECT * FROM pantry_movements WHERE family_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 50',
+            [familyId]
+        ).map(rowToPantryMovement);
+        const purchaseImports = this.selectRows(
+            'SELECT data_json FROM purchase_imports WHERE family_id = ? ORDER BY created_at DESC, rowid DESC',
+            [familyId]
+        ).map(row => parseJson<PurchaseImportJob>(row.data_json, {} as PurchaseImportJob))
+            .filter(job => !!job.id)
+            .map(job => {
+                const storedFiles = this.selectRows(
+                    'SELECT * FROM purchase_import_files WHERE family_id = ? AND import_id = ? ORDER BY page',
+                    [familyId, job.id]
+                ).map(rowToPurchaseImportFile);
+                return {
+                    ...job,
+                    files: storedFiles.length > 0 ? storedFiles : job.files,
+                    items: this.selectRows(
+                        'SELECT data_json FROM purchase_import_items WHERE family_id = ? AND import_id = ? ORDER BY rowid',
+                        [familyId, job.id]
+                    ).map(row => parseJson<PurchaseImportItem>(row.data_json, {} as PurchaseImportItem)).filter(item => !!item.id)
+                };
+            });
+
+        const data: AppData = {
             family,
             currentUser: { ...currentUser, familyId },
             members,
@@ -280,8 +484,21 @@ export class FamTrackDatabase {
             inventory: this.selectRows('SELECT * FROM inventory WHERE family_id = ? ORDER BY rowid', [familyId]).map(rowToInventoryItem),
             shoppingList: this.selectRows('SELECT * FROM shopping_items WHERE family_id = ? ORDER BY rowid', [familyId]).map(rowToShoppingItem),
             notes: this.selectRows('SELECT * FROM notes WHERE family_id = ? ORDER BY is_pinned DESC, updated_at DESC, rowid DESC', [familyId]).map(rowToNote),
-            events: this.selectRows('SELECT * FROM events WHERE family_id = ? ORDER BY rowid', [familyId]).map(rowToEvent)
+            events: this.selectRows('SELECT * FROM events WHERE family_id = ? ORDER BY rowid', [familyId]).map(rowToEvent),
+            routines,
+            routineEvents,
+            wishlists,
+            dashboardPreferences,
+            pantry: {
+                products: pantryProducts,
+                recentMovements: pantryMovements,
+                totalProducts: pantryProducts.length,
+                lowStockCount: pantryProducts.filter(product => product.quantity <= (product.lowStockThreshold ?? 0)).length
+            },
+            purchaseImports
         };
+        data.routineSummary = summarizeRoutines(data);
+        return data;
     }
 
     mutate(
@@ -340,6 +557,8 @@ export class FamTrackDatabase {
         if (existing) {
             this.assertMatchingReceipt(existing, receipt);
             const revision = this.getRevision(familyId);
+            this.operationMetrics.commandDuplicate += 1;
+            if (expectedRevision !== revision) this.operationMetrics.commandRebased += 1;
             return {
                 revision,
                 data: this.getAppData(familyId, actor),
@@ -350,7 +569,12 @@ export class FamTrackDatabase {
             };
         }
 
-        return this.persistedTransaction(() => {
+        const writeTargets = commandWriteTargets(receipt.operation);
+        if (!writeTargets) {
+            throw new Error(`No route-scoped write set is registered for ${receipt.operation}`);
+        }
+
+        const result = this.persistedTransaction(() => {
             const revision = this.getRevision(familyId);
             const receiptInTransaction = this.selectRows(
                 'SELECT * FROM mutation_receipts WHERE family_id = ? AND mutation_id = ?',
@@ -375,9 +599,13 @@ export class FamTrackDatabase {
 
             const current = this.getAppData(familyId, actor);
             const next = mutator(current);
-            this.replaceFamilyData(familyId, next);
-            const nextRevision = revision + 1;
-            this.setFamilyRevision(familyId, nextRevision);
+            this.assertWriteSetCoversChanges(current, next, writeTargets, receipt.operation);
+            const hasChanges = writeTargets.some(target => (
+                JSON.stringify(this.writeTargetValue(current, target)) !== JSON.stringify(this.writeTargetValue(next, target))
+            ));
+            if (hasChanges) this.replaceFamilyData(familyId, next, writeTargets);
+            const nextRevision = hasChanges ? revision + 1 : revision;
+            if (hasChanges) this.setFamilyRevision(familyId, nextRevision);
             const now = Date.now();
             this.db.run(
                 `INSERT INTO mutation_receipts (
@@ -403,6 +631,9 @@ export class FamTrackDatabase {
                 }
             };
         });
+        if (result.command.duplicate) this.operationMetrics.commandDuplicate += 1;
+        if (result.command.rebased) this.operationMetrics.commandRebased += 1;
+        return result;
     }
 
     exportEnvelope(familyOrActor?: string | User) {
@@ -594,11 +825,23 @@ export class FamTrackDatabase {
         this.addColumnIfMissing('tasks', 'completed_at', 'INTEGER');
         this.addColumnIfMissing('tasks', 'completed_by_id', 'TEXT');
         this.addColumnIfMissing('tasks', 'rewarded_at', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'captured_at', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'next_action', 'TEXT');
+        this.addColumnIfMissing('tasks', 'estimate_minutes', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'depends_on_ids_json', 'TEXT');
+        this.addColumnIfMissing('tasks', 'routine_template_id', 'TEXT');
+        this.addColumnIfMissing('tasks', 'routine_occurrence_key', 'TEXT');
+        this.addColumnIfMissing('tasks', 'routine_due_at', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'routine_units', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'routine_rewarded_units', 'INTEGER');
         this.addColumnIfMissing('rewards', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
         this.addColumnIfMissing('rewards', 'created_by_id', 'TEXT');
         this.addColumnIfMissing('rewards', 'updated_at', 'INTEGER');
+        this.addColumnIfMissing('purchase_import_files', 'width', 'INTEGER');
+        this.addColumnIfMissing('purchase_import_files', 'height', 'INTEGER');
         this.db.run('UPDATE families SET settings_json = ? WHERE settings_json IS NULL OR settings_json = ?', [json(DEFAULT_FAMILY_SETTINGS), '']);
         this.db.run("UPDATE users SET is_active = 0 WHERE id = 'u4' AND name = 'Дочь' AND role = 'CHILD' AND telegram_id IS NULL");
+        this.migrateLegacyRecurringTasks();
         this.removeLegacyDemoPlaystationSavingsGoal();
         this.db.run(
             'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)',
@@ -711,7 +954,16 @@ export class FamTrackDatabase {
                 notification_mode TEXT NOT NULL DEFAULT 'INHERIT',
                 completed_at INTEGER,
                 completed_by_id TEXT,
-                rewarded_at INTEGER
+                rewarded_at INTEGER,
+                captured_at INTEGER,
+                next_action TEXT,
+                estimate_minutes INTEGER,
+                depends_on_ids_json TEXT,
+                routine_template_id TEXT,
+                routine_occurrence_key TEXT,
+                routine_due_at INTEGER,
+                routine_units INTEGER,
+                routine_rewarded_units INTEGER
             );
             CREATE TABLE IF NOT EXISTS accounts (
                 family_id TEXT NOT NULL,
@@ -853,6 +1105,88 @@ export class FamTrackDatabase {
             );
             CREATE INDEX IF NOT EXISTS idx_notes_family_scope ON notes(family_id, scope);
             CREATE INDEX IF NOT EXISTS idx_notes_family_created_by ON notes(family_id, created_by_id);
+            CREATE TABLE IF NOT EXISTS routine_templates (
+                family_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY (family_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS routine_events (
+                family_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                routine_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY (family_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_routine_events_family_routine
+                ON routine_events(family_id, routine_id, timestamp);
+            CREATE TABLE IF NOT EXISTS wishlists (
+                family_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY (family_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                family_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY (family_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS pantry_products (
+                family_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY (family_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS pantry_movements (
+                family_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                quantity_delta REAL NOT NULL,
+                quantity_after REAL NOT NULL,
+                actor_id TEXT NOT NULL,
+                source_id TEXT,
+                rollback_of_id TEXT,
+                note TEXT,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (family_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pantry_movements_family_product
+                ON pantry_movements(family_id, product_id, created_at);
+            CREATE TABLE IF NOT EXISTS purchase_imports (
+                family_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (family_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS purchase_import_items (
+                family_id TEXT NOT NULL,
+                import_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                PRIMARY KEY (family_id, import_id, id)
+            );
+            CREATE TABLE IF NOT EXISTS purchase_import_files (
+                family_id TEXT NOT NULL,
+                import_id TEXT NOT NULL,
+                page INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL,
+                width INTEGER,
+                height INTEGER,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (family_id, import_id, page)
+            );
         `);
     }
 
@@ -907,6 +1241,87 @@ export class FamTrackDatabase {
             SELECT ${familyExpression}, category_id, limit_amount FROM budgets_legacy_migration
         `);
         this.db.run('DROP TABLE budgets_legacy_migration');
+    }
+
+    private migrateLegacyRecurringTasks() {
+        const rows = this.selectRows(
+            `SELECT tasks.*, families.settings_json
+             FROM tasks
+             JOIN families ON families.id = tasks.family_id
+             WHERE tasks.is_recurring = 1
+               AND tasks.status NOT IN ('DONE', 'DROPPED')
+               AND (tasks.routine_template_id IS NULL OR tasks.routine_template_id = '')`
+        );
+        for (const row of rows) {
+            const taskId = String(row.id);
+            const routineId = `routine-legacy-${taskId}`;
+            const frequency = String(row.frequency || 'WEEKLY');
+            const schedule = frequency === 'DAILY'
+                ? { kind: 'DAILY' }
+                : frequency === 'MONTHLY'
+                    ? { kind: 'MONTHLY', dayOfMonth: Number(String(row.due_date || '').slice(8, 10)) || 1 }
+                    : frequency === 'YEARLY'
+                        ? {
+                            kind: 'YEARLY',
+                            month: Number(String(row.due_date || '').slice(5, 7)) || 1,
+                            day: Number(String(row.due_date || '').slice(8, 10)) || 1
+                        }
+                        : { kind: 'INTERVAL_WEEKS', interval: 1, weekDays: [new Date(`${row.due_date || '1970-01-05'}T00:00:00.000Z`).getUTCDay()] };
+            const settings = normalizeFamilySettings(parseJson(row.settings_json, DEFAULT_FAMILY_SETTINGS));
+            const createdAt = toNumber(row.created_at, Date.now());
+            const startDate = typeof row.due_date === 'string' && row.due_date ? row.due_date : new Date(createdAt).toISOString().slice(0, 10);
+            const template: RoutineTemplate = {
+                id: routineId,
+                title: String(row.title),
+                description: typeof row.description === 'string' ? row.description : undefined,
+                kind: 'SCHEDULED',
+                schedule: schedule as RoutineTemplate['schedule'],
+                assignmentMode: row.assignee_id ? 'FIXED' : 'FREE',
+                assigneeIds: row.assignee_id ? [String(row.assignee_id)] : [],
+                difficulty: String(row.difficulty || 'MEDIUM') as RoutineTemplate['difficulty'],
+                priority: String(row.priority || 'MEDIUM') as RoutineTemplate['priority'],
+                visibility: Array.isArray(parseJson(row.visible_to_json, [])) && parseJson<unknown[]>(row.visible_to_json, []).length > 0
+                    ? 'PERSONAL'
+                    : 'FAMILY',
+                ownerId: Array.isArray(parseJson(row.visible_to_json, [])) ? String(parseJson<unknown[]>(row.visible_to_json, [])[0] || '') || undefined : undefined,
+                startDate,
+                time: safeIsoClock(row.reminder_time),
+                timezone: settings.timezone,
+                paused: false,
+                nextOccurrenceDate: typeof row.due_date === 'string' ? row.due_date : startDate,
+                openTaskId: taskId,
+                accumulatedUnits: 0,
+                streak: 0,
+                createdById: String(row.created_by_id),
+                createdAt,
+                updatedAt: Date.now()
+            };
+            const event: RoutineEvent = {
+                id: `routine-event-migrated-${taskId}`,
+                routineId,
+                type: 'MIGRATED',
+                actorId: String(row.created_by_id),
+                taskId,
+                occurrenceKey: template.nextOccurrenceDate,
+                timestamp: Date.now(),
+                payload: { legacyTaskId: taskId, legacyFrequency: frequency }
+            };
+            this.db.run(
+                'INSERT OR IGNORE INTO routine_templates (family_id, id, data_json) VALUES (?, ?, ?)',
+                [String(row.family_id), routineId, json(template)]
+            );
+            this.db.run(
+                `INSERT OR IGNORE INTO routine_events (
+                    family_id, id, routine_id, type, actor_id, timestamp, data_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [String(row.family_id), event.id, routineId, event.type, event.actorId, event.timestamp, json(event)]
+            );
+            this.db.run(
+                `UPDATE tasks SET routine_template_id = ?, routine_occurrence_key = ?, captured_at = COALESCE(captured_at, created_at)
+                 WHERE family_id = ? AND id = ?`,
+                [routineId, template.nextOccurrenceDate, String(row.family_id), taskId]
+            );
+        }
     }
 
     private removeLegacyDemoPlaystationSavingsGoal() {
@@ -1002,57 +1417,157 @@ export class FamTrackDatabase {
         }
     }
 
-    private replaceFamilyData(familyId: string, data: AppData) {
+    private replaceFamilyData(
+        familyId: string,
+        data: AppData,
+        writeTargets: readonly FamilyWriteTarget[] = ALL_FAMILY_WRITE_TARGETS
+    ) {
+        const targets = new Set(writeTargets);
         const members = [
             ...(data.members || []),
             ...((data.archivedMembers || []).filter(archived => !(data.members || []).some(member => member.id === archived.id)))
         ];
-        this.deleteMissingRows(familyId, 'users', 'id', members.map(item => item.id));
-        this.deleteMissingRows(familyId, 'epics', 'id', (data.epics || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'tasks', 'id', (data.tasks || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'accounts', 'id', (data.accounts || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'financial_goals', 'id', (data.goals || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'savings_goals', 'id', (data.savingsGoals || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'goal_contributions', 'id', (data.contributions || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'subscriptions', 'id', (data.subscriptions || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'budgets', 'category_id', (data.budgets || []).map(item => item.categoryId));
-        this.deleteMissingRows(familyId, 'transactions', 'id', (data.transactions || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'rewards', 'id', (data.rewards || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'reward_logs', 'id', (data.rewardLogs || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'inventory', 'id', (data.inventory || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'shopping_items', 'id', (data.shoppingList || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'notes', 'id', (data.notes || []).map(item => item.id));
-        this.deleteMissingRows(familyId, 'events', 'id', (data.events || []).map(item => item.id));
+        if (targets.has('members')) {
+            this.deleteMissingRows(familyId, 'users', 'id', members.map(item => item.id));
+            this.insertUsers(familyId, members);
+        }
+        if (targets.has('epics')) {
+            this.deleteMissingRows(familyId, 'epics', 'id', (data.epics || []).map(item => item.id));
+            this.insertEpics(familyId, data.epics || []);
+        }
+        if (targets.has('tasks')) {
+            this.deleteMissingRows(familyId, 'tasks', 'id', (data.tasks || []).map(item => item.id));
+            this.insertTasks(familyId, data.tasks || []);
+        }
+        if (targets.has('accounts')) {
+            this.deleteMissingRows(familyId, 'accounts', 'id', (data.accounts || []).map(item => item.id));
+            this.insertAccounts(familyId, data.accounts || []);
+        }
+        if (targets.has('goals')) {
+            this.deleteMissingRows(familyId, 'financial_goals', 'id', (data.goals || []).map(item => item.id));
+            this.insertFinancialGoals(familyId, data.goals || []);
+        }
+        if (targets.has('savingsGoals')) {
+            this.deleteMissingRows(familyId, 'savings_goals', 'id', (data.savingsGoals || []).map(item => item.id));
+            this.insertSavingsGoals(familyId, data.savingsGoals || []);
+        }
+        if (targets.has('contributions')) {
+            this.deleteMissingRows(familyId, 'goal_contributions', 'id', (data.contributions || []).map(item => item.id));
+            this.insertContributions(familyId, data.contributions || []);
+        }
+        if (targets.has('subscriptions')) {
+            this.deleteMissingRows(familyId, 'subscriptions', 'id', (data.subscriptions || []).map(item => item.id));
+            this.insertSubscriptions(familyId, data.subscriptions || []);
+        }
+        if (targets.has('budgets')) {
+            this.deleteMissingRows(familyId, 'budgets', 'category_id', (data.budgets || []).map(item => item.categoryId));
+            this.insertBudgets(familyId, data.budgets || []);
+        }
+        if (targets.has('transactions')) {
+            this.deleteMissingRows(familyId, 'transactions', 'id', (data.transactions || []).map(item => item.id));
+            this.insertTransactions(familyId, data.transactions || []);
+        }
+        if (targets.has('rewards')) {
+            this.deleteMissingRows(familyId, 'rewards', 'id', (data.rewards || []).map(item => item.id));
+            this.insertRewards(familyId, data.rewards || []);
+        }
+        if (targets.has('rewardLogs')) {
+            this.deleteMissingRows(familyId, 'reward_logs', 'id', (data.rewardLogs || []).map(item => item.id));
+            this.insertRewardLogs(familyId, data.rewardLogs || []);
+        }
+        if (targets.has('inventory')) {
+            this.deleteMissingRows(familyId, 'inventory', 'id', (data.inventory || []).map(item => item.id));
+            this.insertInventory(familyId, data.inventory || []);
+        }
+        if (targets.has('shoppingList')) {
+            this.deleteMissingRows(familyId, 'shopping_items', 'id', (data.shoppingList || []).map(item => item.id));
+            this.insertShoppingItems(familyId, data.shoppingList || []);
+        }
+        if (targets.has('notes')) {
+            this.deleteMissingRows(familyId, 'notes', 'id', (data.notes || []).map(item => item.id));
+            this.insertNotes(familyId, data.notes || []);
+        }
+        if (targets.has('events')) {
+            this.deleteMissingRows(familyId, 'events', 'id', (data.events || []).map(item => item.id));
+            this.insertEvents(familyId, data.events || []);
+        }
+        if (targets.has('routines')) {
+            this.deleteMissingRows(familyId, 'routine_templates', 'id', (data.routines || []).map(item => item.id));
+            this.insertRoutineTemplates(familyId, data.routines || []);
+        }
+        if (targets.has('routineEvents')) {
+            this.insertRoutineEvents(familyId, data.routineEvents || []);
+        }
+        if (targets.has('wishlists')) {
+            this.deleteMissingRows(familyId, 'wishlists', 'id', (data.wishlists || []).map(item => item.id));
+            this.insertWishlists(familyId, data.wishlists || []);
+        }
+        if (targets.has('dashboardPreferences') && data.dashboardPreferences) {
+            this.insertDashboardPreference(familyId, data.dashboardPreferences);
+        }
+        if (targets.has('pantry') && data.pantry) {
+            this.deleteMissingRows(familyId, 'pantry_products', 'id', data.pantry.products.map(item => item.id));
+            this.insertPantryProducts(familyId, data.pantry.products);
+            this.insertPantryMovements(familyId, data.pantry.recentMovements);
+        }
+        if (targets.has('purchaseImports')) {
+            this.deleteMissingRows(familyId, 'purchase_imports', 'id', (data.purchaseImports || []).map(job => job.id));
+            this.insertPurchaseImports(familyId, data.purchaseImports || []);
+            this.db.run(`
+                DELETE FROM purchase_import_items
+                WHERE family_id = ? AND import_id NOT IN (
+                    SELECT id FROM purchase_imports WHERE family_id = ?
+                )
+            `, [familyId, familyId]);
+            this.db.run(`
+                DELETE FROM purchase_import_files
+                WHERE family_id = ? AND import_id NOT IN (
+                    SELECT id FROM purchase_imports WHERE family_id = ?
+                )
+            `, [familyId, familyId]);
+        }
 
-        this.insertUsers(familyId, members);
-        this.insertEpics(familyId, data.epics || []);
-        this.insertTasks(familyId, data.tasks || []);
-        this.insertAccounts(familyId, data.accounts || []);
-        this.insertFinancialGoals(familyId, data.goals || []);
-        this.insertSavingsGoals(familyId, data.savingsGoals || []);
-        this.insertContributions(familyId, data.contributions || []);
-        this.insertSubscriptions(familyId, data.subscriptions || []);
-        this.insertBudgets(familyId, data.budgets || []);
-        this.insertTransactions(familyId, data.transactions || []);
-        this.insertRewards(familyId, data.rewards || []);
-        this.insertRewardLogs(familyId, data.rewardLogs || []);
-        this.insertInventory(familyId, data.inventory || []);
-        this.insertShoppingItems(familyId, data.shoppingList || []);
-        this.insertNotes(familyId, data.notes || []);
-        this.insertEvents(familyId, data.events || []);
+        if (targets.has('family')) {
+            const owner = members.find(member => member.isActive !== false && member.role === 'OWNER') || members[0];
+            const family = data.family;
+            this.db.run(
+                `UPDATE families SET name = COALESCE(?, name), owner_user_id = COALESCE(?, owner_user_id),
+                 settings_json = ? WHERE id = ?`,
+                [
+                    nullable(family?.name),
+                    family?.ownerUserId || owner?.id || data.currentUser?.id || '',
+                    json(normalizeFamilySettings(family?.settings || DEFAULT_FAMILY_SETTINGS)),
+                    familyId
+                ]
+            );
+        }
+    }
 
-        const owner = members.find(member => member.isActive !== false && member.role === 'OWNER') || members[0];
-        const family = data.family;
-        this.db.run(
-            `UPDATE families SET name = COALESCE(?, name), owner_user_id = COALESCE(?, owner_user_id),
-             settings_json = ? WHERE id = ?`,
-            [
-                nullable(family?.name),
-                family?.ownerUserId || owner?.id || data.currentUser?.id || '',
-                json(normalizeFamilySettings(family?.settings || DEFAULT_FAMILY_SETTINGS)),
-                familyId
-            ]
-        );
+    private assertWriteSetCoversChanges(
+        current: AppData,
+        next: AppData,
+        writeTargets: readonly FamilyWriteTarget[],
+        operation: string
+    ) {
+        const allowed = new Set(writeTargets);
+        const uncovered = ALL_FAMILY_WRITE_TARGETS.filter(target => (
+            !allowed.has(target)
+            && JSON.stringify(this.writeTargetValue(current, target)) !== JSON.stringify(this.writeTargetValue(next, target))
+        ));
+        if (uncovered.length > 0) {
+            throw new Error(`Route-scoped write set for ${operation} misses: ${uncovered.join(', ')}`);
+        }
+    }
+
+    private writeTargetValue(data: AppData, target: FamilyWriteTarget) {
+        if (target === 'family') return data.family;
+        if (target === 'members') {
+            return [
+                ...(data.members || []),
+                ...((data.archivedMembers || []).filter(archived => !(data.members || []).some(member => member.id === archived.id)))
+            ];
+        }
+        return data[target];
     }
 
     private deleteMissingRows(familyId: string, table: string, keyColumn: string, nextIds: string[]) {
@@ -1150,8 +1665,10 @@ export class FamTrackDatabase {
                 family_id, id, title, description, status, priority, difficulty, points, assignee_id,
                 created_by_id, epic_id, subtasks_json, created_at, sort_order, due_date,
                 reminder_time, visible_to_json, is_recurring, frequency, notification_mode,
-                completed_at, completed_by_id, rewarded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                completed_at, completed_by_id, rewarded_at, captured_at, next_action,
+                estimate_minutes, depends_on_ids_json, routine_template_id,
+                routine_occurrence_key, routine_due_at, routine_units, routine_rewarded_units
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         try {
             tasks.forEach((task, index) => {
@@ -1178,7 +1695,16 @@ export class FamTrackDatabase {
                     task.notificationMode || 'INHERIT',
                     nullable(task.completedAt),
                     nullable(task.completedById),
-                    nullable(task.rewardedAt)
+                    nullable(task.rewardedAt),
+                    nullable(task.capturedAt),
+                    nullable(task.nextAction),
+                    nullable(task.estimateMinutes),
+                    json(task.dependsOnIds),
+                    nullable(task.routineTemplateId),
+                    nullable(task.routineOccurrenceKey),
+                    nullable(task.routineDueAt),
+                    nullable(task.routineUnits),
+                    nullable(task.routineRewardedUnits)
                 ]);
             });
         } finally {
@@ -1500,6 +2026,154 @@ export class FamTrackDatabase {
         }
     }
 
+    private insertRoutineTemplates(familyId: string, routines: RoutineTemplate[]) {
+        const stmt = this.db.prepare('INSERT OR REPLACE INTO routine_templates (family_id, id, data_json) VALUES (?, ?, ?)');
+        try {
+            for (const routine of routines) stmt.run([familyId, routine.id, json(routine)]);
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private insertRoutineEvents(familyId: string, events: RoutineEvent[]) {
+        const stmt = this.db.prepare(`
+            INSERT OR IGNORE INTO routine_events (
+                family_id, id, routine_id, type, actor_id, timestamp, data_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        try {
+            for (const event of events) {
+                stmt.run([familyId, event.id, event.routineId, event.type, event.actorId, event.timestamp, json(event)]);
+            }
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private insertWishlists(familyId: string, wishlists: Wishlist[]) {
+        const stmt = this.db.prepare('INSERT OR REPLACE INTO wishlists (family_id, id, data_json) VALUES (?, ?, ?)');
+        try {
+            for (const wishlist of wishlists) stmt.run([familyId, wishlist.id, json(wishlist)]);
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private insertDashboardPreference(familyId: string, preference: DashboardPreferences) {
+        this.db.run(
+            'INSERT OR REPLACE INTO user_preferences (family_id, user_id, data_json) VALUES (?, ?, ?)',
+            [familyId, preference.userId, json(preference)]
+        );
+    }
+
+    private insertPantryProducts(familyId: string, products: PantryProduct[]) {
+        const stmt = this.db.prepare('INSERT OR REPLACE INTO pantry_products (family_id, id, data_json) VALUES (?, ?, ?)');
+        try {
+            for (const product of products) stmt.run([familyId, product.id, json(product)]);
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private insertPantryMovements(familyId: string, movements: PantryMovement[]) {
+        const stmt = this.db.prepare(`
+            INSERT OR IGNORE INTO pantry_movements (
+                family_id, id, product_id, type, quantity_delta, quantity_after,
+                actor_id, source_id, rollback_of_id, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        try {
+            for (const movement of movements) {
+                stmt.run([
+                    familyId,
+                    movement.id,
+                    movement.productId,
+                    movement.type,
+                    movement.quantityDelta,
+                    movement.quantityAfter,
+                    movement.actorId,
+                    nullable(movement.sourceId),
+                    nullable(movement.rollbackOfId),
+                    nullable(movement.note),
+                    movement.createdAt
+                ]);
+            }
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private insertPurchaseImports(familyId: string, jobs: PurchaseImportJob[]) {
+        const jobStmt = this.db.prepare(`
+            INSERT OR REPLACE INTO purchase_imports (
+                family_id, id, actor_id, status, data_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        const itemStmt = this.db.prepare(`
+            INSERT OR REPLACE INTO purchase_import_items (family_id, import_id, id, data_json)
+            VALUES (?, ?, ?, ?)
+        `);
+        const fileStmt = this.db.prepare(`
+            INSERT OR REPLACE INTO purchase_import_files (
+                family_id, import_id, page, path, mime_type, size_bytes, sha256, width, height, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        try {
+            for (const job of jobs) {
+                const { items: _items, files: _files, ...storedJob } = job;
+                jobStmt.run([familyId, job.id, job.actorId, job.status, json({ ...storedJob, items: [] }), job.createdAt, job.updatedAt]);
+                const keepIds = new Set(job.items.map(item => item.id));
+                const existingItems = this.selectRows(
+                    'SELECT id FROM purchase_import_items WHERE family_id = ? AND import_id = ?',
+                    [familyId, job.id]
+                );
+                for (const row of existingItems) {
+                    const itemId = String(row.id);
+                    if (!keepIds.has(itemId)) {
+                        this.db.run(
+                            'DELETE FROM purchase_import_items WHERE family_id = ? AND import_id = ? AND id = ?',
+                            [familyId, job.id, itemId]
+                        );
+                    }
+                }
+                for (const item of job.items) itemStmt.run([familyId, job.id, item.id, json(item)]);
+                const keepPages = new Set((job.files || []).map(file => file.page));
+                const existingFiles = this.selectRows(
+                    'SELECT page FROM purchase_import_files WHERE family_id = ? AND import_id = ?',
+                    [familyId, job.id]
+                );
+                for (const row of existingFiles) {
+                    const page = Number(row.page);
+                    if (!keepPages.has(page)) {
+                        this.db.run(
+                            'DELETE FROM purchase_import_files WHERE family_id = ? AND import_id = ? AND page = ?',
+                            [familyId, job.id, page]
+                        );
+                    }
+                }
+                for (const file of job.files || []) {
+                    if (!file.path) continue;
+                    fileStmt.run([
+                        familyId,
+                        job.id,
+                        file.page,
+                        file.path,
+                        file.mimeType,
+                        file.sizeBytes,
+                        file.sha256,
+                        file.width,
+                        file.height,
+                        file.createdAt
+                    ]);
+                }
+            }
+        } finally {
+            jobStmt.free();
+            itemStmt.free();
+            fileStmt.free();
+        }
+    }
+
     private markInviteUsed(token: string) {
         this.persistedTransaction(() => {
             this.db.run('UPDATE family_invites SET used_at = ? WHERE token = ?', [Date.now(), token]);
@@ -1523,20 +2197,26 @@ export class FamTrackDatabase {
 
     private persistedTransaction<T>(operation: () => T): T {
         const before = this.db.export();
+        const writeStarted = performance.now();
         let committed = false;
         this.db.run('BEGIN IMMEDIATE');
         try {
             const result = operation();
             this.db.run('COMMIT');
             committed = true;
+            const persistStarted = performance.now();
             try {
                 this.persist();
             } catch (error) {
+                this.operationMetrics.persistFailure += 1;
                 const restored = new this.SQL.Database(before);
                 this.db.close();
                 this.db = restored;
                 throw error;
+            } finally {
+                this.recordMetricSample(this.operationMetrics.persistDurationsMs, performance.now() - persistStarted);
             }
+            this.recordMetricSample(this.operationMetrics.writeDurationsMs, performance.now() - writeStarted);
             return result;
         } catch (error) {
             if (!committed) {
@@ -1548,6 +2228,11 @@ export class FamTrackDatabase {
             }
             throw error;
         }
+    }
+
+    private recordMetricSample(samples: number[], value: number) {
+        samples.push(Math.max(0, value));
+        if (samples.length > 512) samples.splice(0, samples.length - 512);
     }
 
     private resolveFamilyId(familyOrActor?: string | User) {
@@ -1816,7 +2501,16 @@ const rowToTask = (row: Row): Task => ({
     notificationMode: row.notification_mode == null ? 'INHERIT' : row.notification_mode as Task['notificationMode'],
     completedAt: row.completed_at == null ? undefined : toNumber(row.completed_at),
     completedById: row.completed_by_id == null ? undefined : String(row.completed_by_id),
-    rewardedAt: row.rewarded_at == null ? undefined : toNumber(row.rewarded_at)
+    rewardedAt: row.rewarded_at == null ? undefined : toNumber(row.rewarded_at),
+    capturedAt: row.captured_at == null ? undefined : toNumber(row.captured_at),
+    nextAction: row.next_action == null ? undefined : String(row.next_action),
+    estimateMinutes: row.estimate_minutes == null ? undefined : toNumber(row.estimate_minutes),
+    dependsOnIds: parseJson<string[] | undefined>(row.depends_on_ids_json, undefined),
+    routineTemplateId: row.routine_template_id == null ? undefined : String(row.routine_template_id),
+    routineOccurrenceKey: row.routine_occurrence_key == null ? undefined : String(row.routine_occurrence_key),
+    routineDueAt: row.routine_due_at == null ? undefined : toNumber(row.routine_due_at),
+    routineUnits: row.routine_units == null ? undefined : toNumber(row.routine_units),
+    routineRewardedUnits: row.routine_rewarded_units == null ? undefined : toNumber(row.routine_rewarded_units)
 });
 
 const rowToAccount = (row: Row): Account => ({
@@ -1953,6 +2647,30 @@ const rowToEvent = (row: Row): AppEvent => ({
     actorId: String(row.actor_id),
     payload: parseJson<Record<string, unknown>>(row.payload_json, {}),
     timestamp: toNumber(row.timestamp)
+});
+
+const rowToPantryMovement = (row: Row): PantryMovement => ({
+    id: String(row.id),
+    productId: String(row.product_id),
+    type: row.type as PantryMovement['type'],
+    quantityDelta: toNumber(row.quantity_delta),
+    quantityAfter: toNumber(row.quantity_after),
+    actorId: String(row.actor_id),
+    sourceId: row.source_id == null ? undefined : String(row.source_id),
+    rollbackOfId: row.rollback_of_id == null ? undefined : String(row.rollback_of_id),
+    note: row.note == null ? undefined : String(row.note),
+    createdAt: toNumber(row.created_at)
+});
+
+const rowToPurchaseImportFile = (row: Row): PurchaseImportFile => ({
+    page: toNumber(row.page),
+    path: String(row.path),
+    mimeType: row.mime_type as PurchaseImportFile['mimeType'],
+    sizeBytes: toNumber(row.size_bytes),
+    sha256: String(row.sha256),
+    width: toNumber(row.width),
+    height: toNumber(row.height),
+    createdAt: toNumber(row.created_at)
 });
 
 export const normalizeAiInputHash = hashInput;

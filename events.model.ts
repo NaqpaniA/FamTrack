@@ -20,6 +20,7 @@ export type EventType =
   | 'SUBSCRIPTION_PAID' 
   | 'SHOPPING_CHECKOUT'
   | 'NOTE_CREATED'
+  | 'PURCHASE_IMPORT_CONFIRMED'
   | 'LEVEL_UP';
 
 export interface AppEvent {
@@ -62,6 +63,11 @@ export const EVENT_CONFIG: Record<EventType, { icon: any, color: string, format:
         icon: StickyNote,
         color: 'bg-sky-100 text-sky-600',
         format: () => 'Добавил(а) семейную заметку'
+    },
+    PURCHASE_IMPORT_CONFIRMED: {
+        icon: ShoppingCart,
+        color: 'bg-emerald-100 text-emerald-700',
+        format: (p) => `Подтвердил(а) покупку «${p.merchant || 'Покупка'}» на ${p.totalStr || '0 ₽'}`
     },
     LEVEL_UP: {
         icon: Trophy,

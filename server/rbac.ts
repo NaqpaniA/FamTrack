@@ -1,6 +1,8 @@
 import type { AppData } from '../types.js';
 import type { User } from '../family.model.js';
 import type { Note } from '../notes.model.js';
+import { filterWishlistsForActor } from './wishlists.js';
+import { summarizeRoutines } from './routines.js';
 
 export class ForbiddenError extends Error {
     status = 403;
@@ -28,6 +30,20 @@ export const canSee = (
 export const filterForActor = (data: AppData, actor: User): AppData => {
     const activeMembers = data.members.filter(member => member.isActive !== false);
     const archivedMembers = data.members.filter(member => member.isActive === false);
+    const visibleRoutines = (data.routines || []).filter(routine => (
+        routine.visibility === 'FAMILY' || routine.ownerId === actor.id
+    ));
+    const visibleRoutineIds = new Set(visibleRoutines.map(routine => routine.id));
+    const visibleTasks = data.tasks.filter(item => (
+        !item.routineTemplateId || visibleRoutineIds.has(item.routineTemplateId)
+    ));
+    const visibleRoutineEvents = (data.routineEvents || []).filter(event => visibleRoutineIds.has(event.routineId));
+    const visibleWishlists = filterWishlistsForActor(data.wishlists || [], actor);
+    const visibleRoutineSummary = summarizeRoutines({
+        ...data,
+        routines: visibleRoutines,
+        routineEvents: visibleRoutineEvents
+    });
 
     if (isOwner(actor)) {
         return {
@@ -35,7 +51,12 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
             currentUser: actor,
             members: activeMembers,
             archivedMembers,
-            notes: (data.notes || []).filter(note => canSeeNote(note, actor))
+            tasks: visibleTasks,
+            notes: (data.notes || []).filter(note => canSeeNote(note, actor)),
+            routines: visibleRoutines,
+            routineEvents: visibleRoutineEvents,
+            routineSummary: visibleRoutineSummary,
+            wishlists: visibleWishlists
         };
     }
 
@@ -53,7 +74,7 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
         members: activeMembers,
         archivedMembers: [],
         epics,
-        tasks: data.tasks.filter(item => canSee(item, actor)),
+        tasks: visibleTasks.filter(item => canSee(item, actor)),
         accounts,
         goals: data.goals.filter(goal => canSee(goal, actor) || accountIds.has(goal.accountId)),
         savingsGoals: visibleSavingsGoals,
@@ -63,7 +84,11 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
         inventory: data.inventory.filter(item => item.ownerId === actor.id),
         notes: (data.notes || []).filter(note => canSeeNote(note, actor)),
         events: data.events.filter(item => item.actorId === actor.id || actor.role === 'ADMIN'),
-        rewardLogs: data.rewardLogs.filter(item => item.userId === actor.id || actor.role === 'ADMIN')
+        rewardLogs: data.rewardLogs.filter(item => item.userId === actor.id || actor.role === 'ADMIN'),
+        routines: visibleRoutines,
+        routineEvents: visibleRoutineEvents,
+        routineSummary: visibleRoutineSummary,
+        wishlists: visibleWishlists
     };
 };
 

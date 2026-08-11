@@ -6,9 +6,42 @@ import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { DEFAULT_FAMILY_ID, FamTrackDatabase, RevisionConflictError, normalizeAiInputHash } from './database.js';
 import { AuthError, getAuthConfig, validateRequestAuth, type AuthContext } from './auth.js';
-import { ForbiddenError, assertCanWrite, filterForActor, sanitizeBatchUpdates, isAdmin, isOwner } from './rbac.js';
+import { ForbiddenError, assertCanWrite, filterForActor, isAdmin, isOwner } from './rbac.js';
 import { familyInviteUrl, telegramMiniAppInviteUrl } from './links.js';
 import { TelegramAvatarService } from './telegram-avatar.js';
+import { familyRevisionEtag, requestEtagMatches } from './http-cache.js';
+import { applyCapabilities, readFeatureCapabilities, type FeatureCapabilities } from './features.js';
+import { completeRoutine, pauseRoutine, recordRoutineUnit, saveRoutine, skipRoutine } from './routines.js';
+import { deleteWishlistItem, saveWishlist, saveWishlistItem, setWishlistReservation } from './wishlists.js';
+import { updateDashboardPreferences } from './preferences.js';
+import { adjustPantry } from './pantry.js';
+import {
+    addPurchaseBarcode,
+    applyPurchaseImportOcr,
+    attachPurchaseImportFile,
+    cancelPurchaseImport,
+    claimPurchaseImport,
+    confirmPurchaseImport,
+    createPurchaseImport,
+    expirePurchaseImportFiles,
+    failPurchaseImport,
+    purchaseImportFileForActor,
+    purchaseImportOcrBlocksForActor,
+    purchaseImportsForActor,
+    queuePurchaseImport,
+    recoverInterruptedPurchaseImport,
+    savePurchaseImportItem,
+    updatePurchaseImport
+} from './purchase-imports.js';
+import {
+    assertStoredReceiptPath,
+    inspectReceiptImage,
+    MAX_RECEIPT_BYTES,
+    removeReceiptFile,
+    storeReceiptPage
+} from './receipt-files.js';
+import { ReceiptOcrClient, ReceiptOcrError } from './receipt-ocr-client.js';
+import { SerialJobQueue } from './serial-job-queue.js';
 import type { AiHelperType, AppData, RequestContext } from '../types.js';
 import type { Role, User } from '../family.model.js';
 import type { TaskStatus } from '../tasks.model.js';
@@ -37,10 +70,12 @@ const port = Number(process.env.PORT || 8080);
 const host = process.env.HOST || '0.0.0.0';
 const dbPath = process.env.FAMTRACK_DB_PATH || '/data/famtrack.sqlite';
 const staticDir = process.env.FAMTRACK_STATIC_DIR || path.resolve(__dirname, '../../dist');
+const importsDir = process.env.FAMTRACK_IMPORTS_DIR || '/data/imports';
 const authConfig = getAuthConfig();
 const aiConfig = getAiConfig();
 const metrics = createMetricsStore();
 const telegramAvatarService = new TelegramAvatarService({ botToken: authConfig.botToken });
+const capabilities = readFeatureCapabilities();
 
 const mimeTypes: Record<string, string> = {
     '.html': 'text/html; charset=utf-8',
@@ -70,6 +105,8 @@ const categoryLabels: Record<string, string> = {
 };
 
 const db = await FamTrackDatabase.open(dbPath);
+const receiptOcrClient = new ReceiptOcrClient();
+const receiptQueue = new SerialJobQueue(processReceiptQueueKey);
 
 const server = http.createServer(async (req, res) => {
     const started = performance.now();
@@ -78,7 +115,7 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('X-Request-Id', requestId);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Permissions-Policy', `camera=${capabilities.pantry ? '(self)' : '()'}, microphone=(), geolocation=()`);
     res.on('finish', () => {
         metrics.record(req.method || 'UNKNOWN', pathname, res.statusCode, performance.now() - started);
     });
@@ -114,6 +151,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, host, () => {
     console.log(`FamTrack listening on ${host}:${port}`);
+    if (capabilities.receiptOcr) {
+        void recoverReceiptQueue().then(cleanupExpiredReceiptFiles);
+        const retentionTimer = setInterval(() => void cleanupExpiredReceiptFiles(), 60 * 60 * 1000);
+        retentionTimer.unref();
+    }
 });
 
 process.on('SIGTERM', () => {
@@ -132,7 +174,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
             ...db.health(),
             authMode: authConfig.mode,
             tenantMode: 'multi-family',
-            aiModel: aiConfig.defaultModel
+            aiModel: aiConfig.defaultModel,
+            capabilities
         });
         return;
     }
@@ -142,12 +185,17 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         authConfig,
         headerValue(req, 'x-famtrack-agent-secret')
     );
+    const outboxRetry = Number(headerValue(req, 'x-famtrack-outbox-retry'));
+    if (Number.isSafeInteger(outboxRetry) && outboxRetry > 0) {
+        metrics.recordOutboxRetry(outboxRetry);
+    }
 
     if (req.method === 'GET' && pathname === '/api/internal/metrics') {
         if (!auth.isInternal) throw new AuthError('Internal metrics require internal auth');
         sendJson(res, 200, {
             ok: true,
             runtime: metrics.snapshot(),
+            database: db.operationalMetrics(),
             health: {
                 ...db.health(),
                 authMode: authConfig.mode,
@@ -174,7 +222,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         const actor = envelope.data.currentUser;
         sendJson(res, 200, {
             revision: envelope.revision,
-            data: filterForActor(envelope.data, actor)
+            data: applyCapabilities(filterForActor(envelope.data, actor), capabilities)
         });
         return;
     }
@@ -186,7 +234,106 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
     }
 
     if (req.method === 'GET' && pathname === '/api/app-data') {
-        sendJson(res, 200, exportForActor(context));
+        const envelope = exportForActor(context);
+        const etag = familyRevisionEtag(context.familyId, envelope.revision);
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'private, no-cache');
+        res.setHeader('Vary', 'X-Telegram-Init-Data, X-FamTrack-Actor-Telegram-Id');
+        if (requestEtagMatches(headerValue(req, 'if-none-match'), etag)) {
+            res.statusCode = 304;
+            res.end();
+            return;
+        }
+        sendJson(res, 200, envelope);
+        return;
+    }
+
+    const purchaseOcrBlocksMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/ocr-blocks$/);
+    if (req.method === 'GET' && purchaseOcrBlocksMatch) {
+        requireFeature(capabilities, 'receiptOcr');
+        const importId = decodeRouteSegment(purchaseOcrBlocksMatch[1]);
+        const blocks = purchaseImportOcrBlocksForActor(db.getAppData(context.familyId, context.actor), importId, context.actor);
+        return sendJson(res, 200, { blocks });
+    }
+
+    const purchaseFileMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/files\/([1-3])$/);
+    if (req.method === 'GET' && purchaseFileMatch) {
+        requireFeature(capabilities, 'receiptOcr');
+        const importId = decodeRouteSegment(purchaseFileMatch[1]);
+        const page = Number(purchaseFileMatch[2]);
+        const file = purchaseImportFileForActor(db.getAppData(context.familyId, context.actor), importId, page, context.actor);
+        const filePath = assertStoredReceiptPath(importsDir, file.path!);
+        const stat = await fs.promises.stat(filePath).catch(() => undefined);
+        if (!stat?.isFile()) return sendJson(res, 404, { error: 'Receipt page not found' });
+        res.writeHead(200, {
+            'Content-Type': file.mimeType,
+            'Content-Length': String(stat.size),
+            'Cache-Control': 'private, no-store',
+            'Content-Disposition': `inline; filename="receipt-page-${page}.${file.mimeType === 'image/png' ? 'png' : 'jpg'}"`
+        });
+        fs.createReadStream(filePath).pipe(res);
+        return;
+    }
+
+    if (req.method === 'GET' && (pathname === '/api/purchase-imports' || /^\/api\/purchase-imports\/[^/]+$/.test(pathname))) {
+        if (!capabilities.pantry && !capabilities.receiptOcr) {
+            throw Object.assign(new Error('Feature is not enabled: purchase imports'), { status: 404, code: 'FEATURE_DISABLED' });
+        }
+        const jobs = purchaseImportsForActor(db.getAppData(context.familyId, context.actor), context.actor);
+        const id = pathname === '/api/purchase-imports' ? undefined : decodeRouteSegment(pathname.slice('/api/purchase-imports/'.length));
+        if (id) {
+            const job = jobs.find(candidate => candidate.id === id);
+            if (!job) return sendJson(res, 404, { error: 'Purchase import not found' });
+            return sendJson(res, 200, { job });
+        }
+        return sendJson(res, 200, { jobs });
+    }
+
+    if (req.method === 'POST' && purchaseFileMatch) {
+        requireFeature(capabilities, 'receiptOcr');
+        const importId = decodeRouteSegment(purchaseFileMatch[1]);
+        const page = Number(purchaseFileMatch[2]);
+        const revisionHeader = Number(headerValue(req, 'x-famtrack-revision'));
+        const revision = Number.isSafeInteger(revisionHeader) ? revisionHeader : null;
+        const mutationId = headerValue(req, 'x-famtrack-mutation-id')?.trim() || '';
+        if (!mutationId) throw Object.assign(new Error('Mutation id is required for receipt uploads'), { status: 428 });
+        const bytes = await readBinaryBody(req, MAX_RECEIPT_BYTES);
+        const info = inspectReceiptImage(bytes, headerValue(req, 'content-type'));
+        const declaredHash = headerValue(req, 'x-famtrack-file-sha256')?.trim().toLowerCase();
+        if (!declaredHash || !/^[a-f0-9]{64}$/.test(declaredHash)) throw badRequest('Receipt image hash is required');
+        if (declaredHash !== info.sha256) throw badRequest('Receipt image hash does not match its command envelope');
+
+        const rawData = db.getAppData(context.familyId, context.actor);
+        // Assert actor visibility before writing anything to disk.
+        const visibleJob = purchaseImportsForActor(rawData, context.actor).find(job => job.id === importId);
+        if (!visibleJob) throw Object.assign(new Error('Purchase import not found'), { status: 404 });
+        const previousPath = rawData.purchaseImports?.find(job => job.id === importId)?.files?.find(file => file.page === page)?.path;
+        const stored = await storeReceiptPage({
+            root: importsDir,
+            familyId: context.familyId,
+            importId,
+            page,
+            bytes,
+            info
+        });
+        try {
+            sendCommand(res, revision, context, pathname, {
+                revision,
+                mutationId,
+                page,
+                sha256: info.sha256,
+                mimeType: info.mimeType,
+                sizeBytes: info.sizeBytes,
+                width: info.width,
+                height: info.height
+            }, data => attachPurchaseImportFile(data, importId, stored.file, context.actor));
+        } catch (error) {
+            if (stored.created) await removeReceiptFile(importsDir, stored.file.path);
+            throw error;
+        }
+        if (previousPath && previousPath !== stored.file.path) {
+            await removeReceiptFile(importsDir, previousPath).catch(() => undefined);
+        }
         return;
     }
 
@@ -198,6 +345,54 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
     const body = await readJsonBody(req);
     const revision = typeof body.revision === 'number' ? body.revision : null;
     const currentData = () => db.getAppData(context.familyId, context.actor);
+
+    const pantryAdjustMatch = pathname.match(/^\/api\/pantry\/([^/]+)\/adjust$/);
+    if (pantryAdjustMatch) {
+        requireFeature(capabilities, 'pantry');
+        return sendCommand(res, revision, context, pathname, body, data => adjustPantry(data, {
+            ...body,
+            productId: decodeRouteSegment(pantryAdjustMatch[1])
+        }, context.actor));
+    }
+    const purchaseBarcodeMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/barcodes$/);
+    if (purchaseBarcodeMatch) {
+        requireFeature(capabilities, 'pantry');
+        const importId = decodeRouteSegment(purchaseBarcodeMatch[1]);
+        return sendCommand(res, revision, context, pathname, body, data => addPurchaseBarcode(data, { ...body, importId }, context.actor));
+    }
+    const purchaseProcessMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/process$/);
+    if (purchaseProcessMatch) {
+        requireFeature(capabilities, 'receiptOcr');
+        const importId = decodeRouteSegment(purchaseProcessMatch[1]);
+        sendCommand(res, revision, context, pathname, body, data => queuePurchaseImport(data, importId, context.actor));
+        receiptQueue.enqueue(receiptQueueKey(context.familyId, importId));
+        return;
+    }
+    const purchaseCancelMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/cancel$/);
+    if (purchaseCancelMatch) {
+        requirePurchaseImportFeature(capabilities);
+        const importId = decodeRouteSegment(purchaseCancelMatch[1]);
+        return sendCommand(res, revision, context, pathname, body, data => cancelPurchaseImport(data, importId, context.actor));
+    }
+    const purchaseUpdateMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)$/);
+    if (purchaseUpdateMatch) {
+        requireFeature(capabilities, 'pantry');
+        const importId = decodeRouteSegment(purchaseUpdateMatch[1]);
+        return sendCommand(res, revision, context, pathname, body, data => updatePurchaseImport(data, importId, body, context.actor));
+    }
+    const purchaseItemMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/items\/([^/]+)$/);
+    if (purchaseItemMatch) {
+        requireFeature(capabilities, 'pantry');
+        const importId = decodeRouteSegment(purchaseItemMatch[1]);
+        const id = decodeRouteSegment(purchaseItemMatch[2]);
+        return sendCommand(res, revision, context, pathname, body, data => savePurchaseImportItem(data, { ...body, importId, id }, context.actor));
+    }
+    const purchaseConfirmMatch = pathname.match(/^\/api\/purchase-imports\/([^/]+)\/confirm$/);
+    if (purchaseConfirmMatch) {
+        requireFeature(capabilities, 'pantry');
+        const importId = decodeRouteSegment(purchaseConfirmMatch[1]);
+        return sendCommand(res, revision, context, pathname, body, data => confirmPurchaseImport(data, importId, context.actor));
+    }
 
     switch (pathname) {
         case '/api/family/invites':
@@ -270,6 +465,47 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
             return sendAuthorizedCommand(res, revision, context, pathname, body, data => setFamilyUserActive(data, body.userId || body.id, true, context.actor));
         case '/api/users/check-in':
             return sendCommand(res, revision, context, pathname, body, data => checkInFamilyMember(data, context.actor));
+        case '/api/users/preferences':
+            requireFeature(capabilities, 'routines');
+            return sendCommand(res, revision, context, pathname, body, data => (
+                updateDashboardPreferences(data, body.preferences || body, context.actor)
+            ));
+        case '/api/routines/save':
+            requireFeature(capabilities, 'routines');
+            return sendCommand(res, revision, context, pathname, body, data => saveRoutine(data, body.routine || body, context.actor));
+        case '/api/routines/pause':
+            requireFeature(capabilities, 'routines');
+            return sendCommand(res, revision, context, pathname, body, data => pauseRoutine(data, body.routineId || body.id, body.paused, context.actor));
+        case '/api/routines/complete':
+            requireFeature(capabilities, 'routines');
+            return sendCommand(res, revision, context, pathname, body, data => completeRoutine(data, body, context.actor));
+        case '/api/routines/record-unit':
+            requireFeature(capabilities, 'routines');
+            return sendCommand(res, revision, context, pathname, body, data => recordRoutineUnit(data, body.routineId || body.id, body.units, context.actor));
+        case '/api/routines/skip':
+            requireFeature(capabilities, 'routines');
+            return sendCommand(res, revision, context, pathname, body, data => skipRoutine(data, body.routineId || body.id, context.actor));
+        case '/api/wishlists/save':
+            requireFeature(capabilities, 'wishlists');
+            return sendCommand(res, revision, context, pathname, body, data => saveWishlist(data, body.wishlist || body, context.actor));
+        case '/api/wishlists/items/save':
+            requireFeature(capabilities, 'wishlists');
+            return sendCommand(res, revision, context, pathname, body, data => saveWishlistItem(data, body.item || body, context.actor));
+        case '/api/wishlists/items/delete':
+            requireFeature(capabilities, 'wishlists');
+            return sendCommand(res, revision, context, pathname, body, data => deleteWishlistItem(data, body.wishlistId, body.itemId || body.id, context.actor));
+        case '/api/wishlists/items/reserve':
+            requireFeature(capabilities, 'wishlists');
+            return sendCommand(res, revision, context, pathname, body, data => setWishlistReservation(data, body.wishlistId, body.itemId || body.id, true, context.actor));
+        case '/api/wishlists/items/release':
+            requireFeature(capabilities, 'wishlists');
+            return sendCommand(res, revision, context, pathname, body, data => setWishlistReservation(data, body.wishlistId, body.itemId || body.id, false, context.actor));
+        case '/api/pantry/adjust':
+            requireFeature(capabilities, 'pantry');
+            return sendCommand(res, revision, context, pathname, body, data => adjustPantry(data, body, context.actor));
+        case '/api/purchase-imports':
+            requireFeature(capabilities, body.source === 'RECEIPT' ? 'receiptOcr' : 'pantry');
+            return sendCommand(res, revision, context, pathname, body, data => createPurchaseImport(data, body, context.actor));
         case '/api/family/settings':
             return sendCommand(res, revision, context, pathname, body, data => {
                 if (!isAdmin(context.actor)) throw new ForbiddenError('Only family parents can change family settings');
@@ -336,26 +572,13 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
                 accountId: body.accountId
             }, context.actor));
         case '/api/batch':
-            return sendMutation(res, revision, context, data => applyScopedUpdates(
-                data,
-                sanitizeBatchUpdates(context.actor, isObject(body.updates) ? body.updates as Partial<AppData> : {}, data)
-            ));
+            return sendJson(res, 410, {
+                error: 'Snapshot batch writes are disabled; use route-scoped commands',
+                code: 'BATCH_COMMAND_DISABLED'
+            });
         default:
             sendJson(res, 404, { error: 'API route not found' });
     }
-}
-
-function sendMutation(
-    res: ServerResponse,
-    revision: number | null,
-    context: RequestContext,
-    mutator: (data: AppData) => AppData
-) {
-    const envelope = db.mutate(context.familyId, revision, mutator, context.actor);
-    sendJson(res, 200, {
-        revision: envelope.revision,
-        data: filterForActor(envelope.data, context.actor)
-    });
 }
 
 function sendCommand(
@@ -381,10 +604,14 @@ function sendCommand(
         operation: pathname,
         requestHash
     }, mutator, context.actor);
+    res.setHeader('ETag', familyRevisionEtag(context.familyId, envelope.revision));
     sendJson(res, 200, {
         revision: envelope.revision,
-        data: filterForActor(envelope.data, context.actor),
-        command: envelope.command
+        data: applyCapabilities(filterForActor(envelope.data, context.actor), capabilities),
+        command: {
+            mutationId,
+            ...envelope.command
+        }
     });
 }
 
@@ -428,7 +655,7 @@ function createInvite(req: IncomingMessage, context: RequestContext, body: Recor
 
 function reorderTasks(data: AppData, rawUpdates: unknown): AppData {
     if (!Array.isArray(rawUpdates)) throw badRequest('Task reorder payload is required');
-    const validStatuses = new Set<TaskStatus>(['TODO', 'IN_PROGRESS', 'DONE']);
+    const validStatuses = new Set<TaskStatus>(['INBOX', 'TODO', 'IN_PROGRESS', 'BLOCKED', 'WAITING', 'DONE', 'DROPPED']);
     const updates = new Map<string, { status: TaskStatus; sortOrder: number }>();
     for (const update of rawUpdates) {
         if (!isObject(update) || typeof update.id !== 'string') continue;
@@ -490,37 +717,6 @@ function saveNote(data: AppData, rawNote: unknown, actor: User): AppData {
         notes,
         events
     };
-}
-
-function applyScopedUpdates(data: AppData, updates: Partial<AppData>): AppData {
-    const next = {
-        ...data,
-        ...updates
-    };
-    if (updates.members) {
-        next.members = mergeMembersPreservingArchive(data.members, updates.members);
-    }
-    delete next.archivedMembers;
-    return next;
-}
-
-function mergeMembersPreservingArchive(previous: User[], incoming: User[]) {
-    const incomingById = new Map(incoming.map(member => [member.id, member]));
-    const merged = previous.map(member => {
-        const next = incomingById.get(member.id);
-        if (!next) return member;
-        return {
-            ...next,
-            isActive: typeof next.isActive === 'boolean' ? next.isActive : member.isActive !== false
-        };
-    });
-    const previousIds = new Set(previous.map(member => member.id));
-    for (const member of incoming) {
-        if (!previousIds.has(member.id)) {
-            merged.push({ ...member, isActive: member.isActive !== false });
-        }
-    }
-    return merged;
 }
 
 function saveFamilyUser(data: AppData, rawUser: unknown, actor: User): AppData {
@@ -792,8 +988,164 @@ function exportForActor(context: RequestContext) {
     const envelope = db.exportEnvelope(context.actor);
     return {
         revision: envelope.revision,
-        data: filterForActor(envelope.data, context.actor)
+        data: applyCapabilities(filterForActor(envelope.data, context.actor), capabilities)
     };
+}
+
+function receiptQueueKey(familyId: string, importId: string) {
+    return `${familyId}\n${importId}`;
+}
+
+async function processReceiptQueueKey(key: string) {
+    const separator = key.indexOf('\n');
+    if (separator < 1) return;
+    const familyId = key.slice(0, separator);
+    const importId = key.slice(separator + 1);
+    let data = db.getAppData(familyId);
+    let job = data.purchaseImports?.find(candidate => candidate.id === importId);
+    if (!job || job.status !== 'QUEUED') return;
+
+    internalReceiptMutation(familyId, importId, 'claim', { retryCount: job.retryCount }, current => (
+        claimPurchaseImport(current, importId)
+    ));
+    data = db.getAppData(familyId);
+    job = data.purchaseImports?.find(candidate => candidate.id === importId);
+    if (!job || job.status !== 'PROCESSING') return;
+
+    try {
+        const result = await receiptOcrClient.recognize(job.files || []);
+        internalReceiptMutation(familyId, importId, 'result', result, current => (
+            applyPurchaseImportOcr(current, importId, result)
+        ));
+    } catch (error) {
+        const ocrError = error instanceof ReceiptOcrError
+            ? error
+            : Object.assign(new Error('Receipt processing failed'), {
+                code: typeof (error as { status?: unknown })?.status === 'number' && (error as { status: number }).status < 500
+                    ? 'OCR_RESULT_REJECTED'
+                    : 'OCR_INTERNAL_ERROR',
+                retryable: !(typeof (error as { status?: unknown })?.status === 'number' && (error as { status: number }).status < 500)
+            });
+        const failed = internalReceiptMutation(familyId, importId, 'failure', {
+            code: ocrError.code,
+            retryable: ocrError.retryable
+        }, current => failPurchaseImport(current, importId, ocrError.code, ocrError.retryable));
+        const failedJob = failed.data.purchaseImports?.find(candidate => candidate.id === importId);
+        if (failedJob?.status === 'FAILED_RETRYABLE') scheduleReceiptRetry(familyId, importId, failedJob.retryCount);
+    }
+}
+
+function internalReceiptMutation(
+    familyId: string,
+    importId: string,
+    stage: 'claim' | 'result' | 'failure' | 'recover' | 'retry' | 'retention',
+    payload: unknown,
+    mutator: (data: AppData) => AppData
+) {
+    const current = db.getAppData(familyId);
+    const job = current.purchaseImports?.find(candidate => candidate.id === importId);
+    if (!job) throw Object.assign(new Error('Purchase import not found'), { status: 404 });
+    const actor = current.members.find(member => member.id === job.actorId) || current.currentUser;
+    const requestHash = createHash('sha256').update(canonicalJson(payload)).digest('hex');
+    const mutationDigest = createHash('sha256')
+        .update(`${familyId}:${importId}:${stage}:${job.status}:${job.updatedAt}:${requestHash}`)
+        .digest('hex')
+        .slice(0, 32);
+    return db.mutateCommand(familyId, db.getRevision(familyId), {
+        mutationId: `ocr-${stage}-${mutationDigest}`,
+        actorId: actor.id,
+        operation: `/api/internal/purchase-imports/${importId}/${stage}`,
+        requestHash
+    }, mutator, actor);
+}
+
+function scheduleReceiptRetry(familyId: string, importId: string, retryCount: number) {
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.max(0, retryCount - 1));
+    const timer = setTimeout(() => {
+        try {
+            const data = db.getAppData(familyId);
+            const job = data.purchaseImports?.find(candidate => candidate.id === importId);
+            if (!job || job.status !== 'FAILED_RETRYABLE') return;
+            const actor = data.members.find(member => member.id === job.actorId) || data.currentUser;
+            internalReceiptMutation(familyId, importId, 'retry', { retryCount: job.retryCount }, current => (
+                queuePurchaseImport(current, importId, actor)
+            ));
+            receiptQueue.enqueue(receiptQueueKey(familyId, importId));
+        } catch (error) {
+            console.error(JSON.stringify({
+                level: 'error',
+                event: 'receipt_retry_failed',
+                importId,
+                error: error instanceof Error ? error.message : 'Unknown retry error'
+            }));
+        }
+    }, delay);
+    timer.unref();
+}
+
+async function recoverReceiptQueue() {
+    for (const familyId of db.listFamilyIds()) {
+        let data = db.getAppData(familyId);
+        for (const candidate of data.purchaseImports || []) {
+            if (candidate.status === 'PROCESSING') {
+                internalReceiptMutation(familyId, candidate.id, 'recover', {}, current => (
+                    recoverInterruptedPurchaseImport(current, candidate.id)
+                ));
+            }
+        }
+        data = db.getAppData(familyId);
+        for (const candidate of data.purchaseImports || []) {
+            if (candidate.status === 'QUEUED') receiptQueue.enqueue(receiptQueueKey(familyId, candidate.id));
+            if (candidate.status === 'FAILED_RETRYABLE') scheduleReceiptRetry(familyId, candidate.id, candidate.retryCount);
+        }
+    }
+}
+
+async function cleanupExpiredReceiptFiles() {
+    const now = Date.now();
+    for (const familyId of db.listFamilyIds()) {
+        const data = db.getAppData(familyId);
+        for (const candidate of data.purchaseImports || []) {
+            if (!candidate.retentionUntil || candidate.retentionUntil > now || !(candidate.files || []).length) continue;
+            const paths = candidate.files?.map(file => file.path).filter((value): value is string => !!value) || [];
+            internalReceiptMutation(familyId, candidate.id, 'retention', { retentionUntil: candidate.retentionUntil }, current => (
+                expirePurchaseImportFiles(current, candidate.id, () => now)
+            ));
+            for (const filePath of paths) {
+                await removeReceiptFile(importsDir, filePath).catch(error => {
+                    console.error(JSON.stringify({
+                        level: 'error',
+                        event: 'receipt_retention_delete_failed',
+                        importId: candidate.id,
+                        error: error instanceof Error ? error.message : 'Unknown retention error'
+                    }));
+                });
+            }
+        }
+    }
+}
+
+function requireFeature(flags: FeatureCapabilities, feature: keyof FeatureCapabilities) {
+    if (!flags[feature]) {
+        throw Object.assign(new Error(`Feature is not enabled: ${feature}`), {
+            status: 404,
+            code: 'FEATURE_DISABLED'
+        });
+    }
+}
+
+function requirePurchaseImportFeature(flags: FeatureCapabilities) {
+    if (!flags.pantry && !flags.receiptOcr) requireFeature(flags, 'pantry');
+}
+
+function decodeRouteSegment(value: string) {
+    try {
+        const decoded = decodeURIComponent(value);
+        if (!/^[A-Za-z0-9._:-]{1,120}$/.test(decoded)) throw new Error('invalid');
+        return decoded;
+    } catch {
+        throw badRequest('Invalid pantry product id');
+    }
 }
 
 async function sendTelegramAvatar(res: ServerResponse, pathname: string, context: RequestContext) {
@@ -966,6 +1318,22 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
     }
 }
 
+async function readBinaryBody(req: IncomingMessage, maximumBytes: number) {
+    const declaredLength = Number(headerValue(req, 'content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+        throw Object.assign(new Error('Request body is too large'), { status: 413 });
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        if (size > maximumBytes) throw Object.assign(new Error('Request body is too large'), { status: 413 });
+        chunks.push(buffer);
+    }
+    return Buffer.concat(chunks);
+}
+
 async function serveStatic(res: ServerResponse, rawPathname: string) {
     const pathname = decodeURIComponent(rawPathname);
     const requested = pathname === '/' ? '/index.html' : pathname;
@@ -1070,6 +1438,8 @@ function createMetricsStore() {
     const startedAt = Date.now();
     const latencyBucketsMs = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
     const routes = new Map<string, RouteMetric>();
+    let outboxRetryEvents = 0;
+    let outboxRetryAttempts = 0;
 
     const getRoute = (method: string, pathname: string) => {
         const route = routeGroup(pathname);
@@ -1092,6 +1462,10 @@ function createMetricsStore() {
     };
 
     return {
+        recordOutboxRetry(retry: number) {
+            outboxRetryEvents += 1;
+            outboxRetryAttempts += retry;
+        },
         record(method: string, pathname: string, statusCode: number, durationMs: number) {
             const item = getRoute(method, pathname);
             item.count += 1;
@@ -1117,6 +1491,10 @@ function createMetricsStore() {
                     externalBytes: memory.external
                 },
                 latencyBucketsMs,
+                outbox_retry: {
+                    events: outboxRetryEvents,
+                    attempts: outboxRetryAttempts
+                },
                 routes: [...routes.values()]
                     .sort((left, right) => `${left.route}:${left.method}`.localeCompare(`${right.route}:${right.method}`))
                     .map(item => ({

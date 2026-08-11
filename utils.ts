@@ -6,6 +6,106 @@ import type { User } from './family.model';
 // Safe access to Telegram Web App object
 const getTelegramWebApp = () => (window as any).Telegram?.WebApp;
 
+type TelegramInset = { top?: number; right?: number; bottom?: number; left?: number };
+type TelegramThemeParams = Record<string, string | undefined>;
+
+const INSET_SIDES = ['top', 'right', 'bottom', 'left'] as const;
+const TELEGRAM_SHELL_EVENTS = [
+  'safeAreaChanged',
+  'contentSafeAreaChanged',
+  'viewportChanged',
+  'fullscreenChanged',
+  'themeChanged'
+] as const;
+
+const finitePixel = (value: unknown) => (
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `${Math.round(value)}px` : '0px'
+);
+
+const setInsetVariables = (prefix: string, inset?: TelegramInset) => {
+  for (const side of INSET_SIDES) {
+    document.documentElement.style.setProperty(`${prefix}-${side}`, finitePixel(inset?.[side]));
+  }
+};
+
+const themeValue = (theme: TelegramThemeParams, key: string, fallback: string) => (
+  typeof theme[key] === 'string' && theme[key] ? theme[key]! : fallback
+);
+
+export const syncTelegramShellCss = () => {
+  const webApp = getTelegramWebApp();
+  const root = document.documentElement;
+  const theme = (webApp?.themeParams || {}) as TelegramThemeParams;
+  const colorScheme = webApp?.colorScheme === 'dark' ? 'dark' : 'light';
+  const dark = colorScheme === 'dark';
+
+  setInsetVariables('--tg-safe-area-inset', webApp?.safeAreaInset);
+  setInsetVariables('--tg-content-safe-area-inset', webApp?.contentSafeAreaInset);
+  root.style.setProperty('--tg-viewport-height', finitePixel(webApp?.viewportHeight || window.innerHeight));
+  root.style.setProperty('--tg-viewport-stable-height', finitePixel(webApp?.viewportStableHeight || webApp?.viewportHeight || window.innerHeight));
+
+  const safeTop = Number(webApp?.safeAreaInset?.top) || 0;
+  const contentTop = Number(webApp?.contentSafeAreaInset?.top) || 0;
+  const androidFullscreenFallback = webApp?.platform === 'android'
+    && webApp?.isFullscreen === true
+    && Math.max(safeTop, contentTop) === 0;
+  root.style.setProperty('--tg-fullscreen-fallback-top', androidFullscreenFallback ? '52px' : '0px');
+
+  const bg = themeValue(theme, 'bg_color', dark ? '#101418' : '#f3f5f7');
+  const secondary = themeValue(theme, 'secondary_bg_color', dark ? '#171d23' : '#e9eef2');
+  const surface = themeValue(theme, 'section_bg_color', dark ? '#1c232b' : '#ffffff');
+  const text = themeValue(theme, 'text_color', dark ? '#f4f7fa' : '#101418');
+  const muted = themeValue(theme, 'hint_color', dark ? '#9aa8b5' : '#65717d');
+  const accent = themeValue(theme, 'button_color', dark ? '#5ba7ff' : '#2481cc');
+  const accentText = themeValue(theme, 'button_text_color', '#ffffff');
+  const separator = themeValue(theme, 'section_separator_color', dark ? '#2c3742' : '#dce3e8');
+
+  root.dataset.telegramTheme = colorScheme;
+  root.style.setProperty('color-scheme', colorScheme);
+  root.style.setProperty('--app-bg', bg);
+  root.style.setProperty('--app-secondary-bg', secondary);
+  root.style.setProperty('--app-surface', surface);
+  root.style.setProperty('--app-text', text);
+  root.style.setProperty('--app-muted', muted);
+  root.style.setProperty('--app-accent', accent);
+  root.style.setProperty('--app-accent-text', accentText);
+  root.style.setProperty('--app-border', separator);
+  root.style.setProperty('--tg-theme-bg-color', bg);
+  root.style.setProperty('--tg-theme-secondary-bg-color', secondary);
+  root.style.setProperty('--tg-theme-section-bg-color', surface);
+  root.style.setProperty('--tg-theme-text-color', text);
+  root.style.setProperty('--tg-theme-hint-color', muted);
+  root.style.setProperty('--tg-theme-button-color', accent);
+  root.style.setProperty('--tg-theme-button-text-color', accentText);
+
+  document.body.style.backgroundColor = bg;
+  document.body.style.color = text;
+  try { webApp?.setHeaderColor?.(bg); } catch { /* unsupported client */ }
+  try { webApp?.setBackgroundColor?.(bg); } catch { /* unsupported client */ }
+  try { webApp?.setBottomBarColor?.(surface); } catch { /* unsupported client */ }
+};
+
+export const installTelegramShellLifecycle = () => {
+  const webApp = getTelegramWebApp();
+  const sync = () => syncTelegramShellCss();
+  const syncVisualViewport = () => {
+    const height = window.visualViewport?.height || window.innerHeight;
+    document.documentElement.style.setProperty('--app-visual-height', finitePixel(height));
+  };
+
+  sync();
+  syncVisualViewport();
+  for (const event of TELEGRAM_SHELL_EVENTS) webApp?.onEvent?.(event, sync);
+  window.addEventListener('resize', syncVisualViewport);
+  window.visualViewport?.addEventListener('resize', syncVisualViewport);
+
+  return () => {
+    for (const event of TELEGRAM_SHELL_EVENTS) webApp?.offEvent?.(event, sync);
+    window.removeEventListener('resize', syncVisualViewport);
+    window.visualViewport?.removeEventListener('resize', syncVisualViewport);
+  };
+};
+
 export const TWA = {
   ready: () => getTelegramWebApp()?.ready?.(),
   expand: () => getTelegramWebApp()?.expand?.(),

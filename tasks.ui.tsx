@@ -39,6 +39,17 @@ import { FinancialGoal } from './finance.model';
 import { api } from './api';
 import type { TaskNotificationMode } from './settings.model';
 
+const TASK_STATUS_META: Record<TaskStatus, { label: string; shortLabel: string; color: string }> = {
+    INBOX: { label: 'Входящие', shortLabel: 'Inbox', color: 'bg-violet-500' },
+    TODO: { label: 'Надо сделать', shortLabel: 'Сделать', color: 'bg-gray-400' },
+    IN_PROGRESS: { label: 'В процессе', shortLabel: 'В работе', color: 'bg-blue-500' },
+    BLOCKED: { label: 'Заблокировано', shortLabel: 'Блок', color: 'bg-red-500' },
+    WAITING: { label: 'Ожидает', shortLabel: 'Ждём', color: 'bg-amber-500' },
+    DONE: { label: 'Готово', shortLabel: 'Готово', color: 'bg-green-500' },
+    DROPPED: { label: 'Отменено', shortLabel: 'Отмена', color: 'bg-slate-400' }
+};
+const TASK_STATUSES = Object.keys(TASK_STATUS_META) as TaskStatus[];
+
 const reminderClock = (timestamp?: string) => {
     if (!timestamp) return '';
     const date = new Date(timestamp);
@@ -60,10 +71,11 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
   const priorityConfig = PRIORITIES[task.priority] || PRIORITIES.LOW;
   const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
   const today = isToday(task.dueDate) && task.status !== 'DONE';
+  const isRoutineTask = !!task.routineTemplateId;
 
   const handleCheck = (e: React.MouseEvent<HTMLButtonElement>) => {
       e.stopPropagation();
-      if (onStatusChange) {
+      if (onStatusChange && !isRoutineTask) {
           const nextStatus = task.status === 'DONE' ? 'TODO' : 'DONE';
           onStatusChange(nextStatus);
       }
@@ -74,9 +86,10 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
       <button 
         type="button"
         onClick={handleCheck}
-        aria-label={task.status === 'DONE' ? `Вернуть задачу «${task.title}»` : `Завершить задачу «${task.title}»`}
+        aria-label={isRoutineTask ? `Рутина «${task.title}» управляется на главной` : task.status === 'DONE' ? `Вернуть задачу «${task.title}»` : `Завершить задачу «${task.title}»`}
         title={task.status === 'DONE' ? 'Вернуть в работу' : 'Завершить'}
-        className={`mt-1 transition-colors active:scale-90 transform ${task.status === 'DONE' ? 'text-green-500' : 'text-gray-300 hover:text-gray-400'}`}
+        disabled={isRoutineTask}
+        className={`mt-1 transition-colors active:scale-90 transform disabled:cursor-default ${task.status === 'DONE' ? 'text-green-500' : isRoutineTask ? 'text-blue-300' : 'text-gray-300 hover:text-gray-400'}`}
       >
         {task.status === 'DONE' ? <CheckCircle2 size={24} className="fill-green-50" /> : <Circle size={24} />}
       </button>
@@ -90,6 +103,7 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
            <Flag size={12} className={priorityConfig.iconColor} />
            {task.visibleTo && task.visibleTo.length > 0 && <EyeOff size={10} className="text-gray-400" />}
            {task.isRecurring && <Clock size={10} className="text-blue-400" />}
+           {isRoutineTask && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">РУТИНА</span>}
         </div>
 
         <div className={`font-medium text-[14px] transition-all ${task.status === 'DONE' ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
@@ -116,7 +130,15 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
                     {new Date(task.reminderTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </div>
             )}
+            {task.estimateMinutes ? (
+                <div className="flex items-center gap-1 rounded bg-gray-50 px-1.5 text-[10px] text-gray-500"><Clock size={10} />≈ {task.estimateMinutes} мин</div>
+            ) : null}
+            {task.dependsOnIds?.length ? (
+                <div className="rounded bg-red-50 px-1.5 text-[10px] text-red-600">Зависит от {task.dependsOnIds.length}</div>
+            ) : null}
         </div>
+
+        {task.nextAction ? <p className="mt-1.5 line-clamp-2 text-xs text-gray-500"><span className="font-bold text-gray-600">Следом:</span> {task.nextAction}</p> : null}
 
         <div className="flex items-center gap-2 mt-2">
           {assignee && (
@@ -160,7 +182,7 @@ export const KanbanCard: React.FC<{
                     return;
                 }
                 if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && onStatusMove) {
-                    const statuses: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'DONE'];
+                    const statuses = TASK_STATUSES;
                     const currentIndex = statuses.indexOf(task.status);
                     const direction = event.key === 'ArrowLeft' ? -1 : 1;
                     const nextStatus = statuses[currentIndex + direction];
@@ -208,7 +230,7 @@ export const KanbanCard: React.FC<{
 
 // --- Editors ---
 
-export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, members: User[], epics: Epic[], currentUser: User }) => {
+export const TaskEditor = ({ task, onSave, onDelete, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Priority>(task?.priority || 'MEDIUM');
@@ -216,7 +238,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   const points = calculateTaskXp(difficulty, priority);
   const [assigneeId, setAssigneeId] = useState(task?.assigneeId || currentUser.id);
   const [epicId, setEpicId] = useState(task?.epicId || '');
-  const [dueDate, setDueDate] = useState(task?.dueDate || new Date().toISOString().split('T')[0]);
+  const [dueDate, setDueDate] = useState(task?.dueDate || '');
   const [reminderTime, setReminderTime] = useState(reminderClock(task?.reminderTime));
   const [isRecurring, setIsRecurring] = useState(task?.isRecurring || false);
   const [frequency, setFrequency] = useState(task?.frequency || 'WEEKLY');
@@ -225,6 +247,11 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   const [visibleTo, setVisibleTo] = useState<string[]>(task?.visibleTo || []);
   const [notificationMode, setNotificationMode] = useState<TaskNotificationMode>(task?.notificationMode || 'INHERIT');
   const [isBreakingDown, setBreakingDown] = useState(false);
+  const [status, setStatus] = useState<TaskStatus>(task?.status || 'INBOX');
+  const [nextAction, setNextAction] = useState(task?.nextAction || '');
+  const [estimateMinutes, setEstimateMinutes] = useState(task?.estimateMinutes ? String(task.estimateMinutes) : '');
+  const [dependsOnIds, setDependsOnIds] = useState<string[]>(task?.dependsOnIds || []);
+  const isRoutineTask = !!task?.routineTemplateId;
 
   const handleAddSubtask = () => {
     if (!newSubtask.trim()) return;
@@ -244,7 +271,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       assigneeId,
       createdById: task?.createdById || currentUser.id,
       epicId: epicId || undefined,
-      status: task?.status || 'TODO',
+      status,
       subtasks,
       createdAt: task?.createdAt || Date.now(),
       sortOrder: task?.sortOrder,
@@ -253,7 +280,11 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       isRecurring,
       frequency: isRecurring ? frequency : undefined,
       visibleTo,
-      notificationMode
+      notificationMode,
+      capturedAt: task?.capturedAt || Date.now(),
+      nextAction: nextAction.trim() || undefined,
+      estimateMinutes: estimateMinutes ? Number(estimateMinutes) : undefined,
+      dependsOnIds
     });
   };
 
@@ -276,6 +307,11 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
 
   return (
     <div className="space-y-4 pb-20">
+      {isRoutineTask ? (
+          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
+              Это экземпляр рутины. Выполнение, пропуск и расписание управляются в блоке «Рутины сегодня» на главной.
+          </div>
+      ) : null}
       <input 
         aria-label="Название задачи"
         className="w-full text-xl font-bold placeholder-gray-300 outline-none border-none bg-transparent" 
@@ -328,6 +364,16 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       </div>
 
       <div className="space-y-3">
+           {!task ? (
+               <div>
+                   <label className="mb-1 block text-xs font-bold uppercase text-gray-400">Куда положить</label>
+                   <select value={status} onChange={event => setStatus(event.target.value as TaskStatus)} className="w-full rounded-lg border border-gray-100 bg-gray-50 p-2 text-sm outline-none focus:border-blue-200">
+                       <option value="INBOX">Во входящие — разобрать позже</option>
+                       <option value="TODO">Сразу в список дел</option>
+                       <option value="WAITING">Ожидает ответа или события</option>
+                   </select>
+               </div>
+           ) : null}
            <div>
               <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Исполнитель</label>
               <div className="flex gap-2">
@@ -341,6 +387,37 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                   ))}
               </div>
            </div>
+
+           <div className="grid grid-cols-[minmax(0,1fr)_112px] gap-3">
+               <label className="space-y-1">
+                   <span className="block text-xs font-bold uppercase text-gray-400">Следующее действие</span>
+                   <input value={nextAction} onChange={event => setNextAction(event.target.value)} maxLength={500} placeholder="Один конкретный шаг" className="w-full rounded-lg border border-gray-100 bg-gray-50 p-2 text-sm outline-none focus:border-blue-200" />
+               </label>
+               <label className="space-y-1">
+                   <span className="block text-xs font-bold uppercase text-gray-400">Оценка, мин</span>
+                   <input type="number" min="0" max="100000" inputMode="numeric" value={estimateMinutes} onChange={event => setEstimateMinutes(event.target.value)} placeholder="15" className="w-full rounded-lg border border-gray-100 bg-gray-50 p-2 text-sm outline-none focus:border-blue-200" />
+               </label>
+           </div>
+
+           {availableTasks.some(candidate => candidate.id !== task?.id && !['DONE', 'DROPPED'].includes(candidate.status)) ? (
+               <details className="rounded-xl bg-gray-50 p-3">
+                   <summary className="cursor-pointer text-sm font-semibold text-gray-700">Зависит от других задач · {dependsOnIds.length}</summary>
+                   <div className="mt-3 max-h-36 space-y-2 overflow-y-auto">
+                       {availableTasks.filter(candidate => candidate.id !== task?.id && !['DONE', 'DROPPED'].includes(candidate.status)).map(candidate => (
+                           <label key={candidate.id} className="flex items-start gap-2 text-sm text-gray-600">
+                               <input
+                                   type="checkbox"
+                                   checked={dependsOnIds.includes(candidate.id)}
+                                   onChange={() => setDependsOnIds(current => current.includes(candidate.id) ? current.filter(id => id !== candidate.id) : [...current, candidate.id])}
+                                   className="mt-0.5"
+                               />
+                               <span className="line-clamp-2">{candidate.title}</span>
+                           </label>
+                       ))}
+                   </div>
+                   <p className="mt-2 text-[11px] text-gray-400">Это подсказка: FamTrack не запрещает начать задачу раньше.</p>
+               </details>
+           ) : null}
 
            <div className="grid grid-cols-2 gap-3">
                <div>
@@ -504,7 +581,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                   <Trash2 size={20} />
               </button>
           )}
-          <button type="button" onClick={handleSave} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform">
+          <button type="button" onClick={handleSave} disabled={isRoutineTask} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform disabled:opacity-40">
               Сохранить
           </button>
       </div>
@@ -820,17 +897,17 @@ export const TasksScreen = ({
                     </Panel>
                 ) : (
                     <div className="flex gap-2 overflow-x-auto pb-4 h-full no-scrollbar snap-x-app mt-4 -mx-1 px-1">
-                        {(['TODO', 'IN_PROGRESS', 'DONE'] as TaskStatus[]).map(status => (
+                        {TASK_STATUSES.map(status => (
                             <div
                                 key={status}
                                 data-kanban-column={status}
                                 role="list"
-                                aria-label={status === 'TODO' ? 'Надо сделать' : status === 'IN_PROGRESS' ? 'В процессе' : 'Готово'}
+                                aria-label={TASK_STATUS_META[status].label}
                                 className="min-w-[calc((100vw-36px)/2)] max-w-[calc((100vw-36px)/2)] sm:min-w-[220px] sm:max-w-[240px] shrink-0 bg-gray-50 rounded-[14px] border border-gray-100 p-2 snap-start"
                             >
                                 <div className="flex items-center gap-1.5 mb-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider truncate">
-                                    <div className={`w-2 h-2 rounded-full shrink-0 ${status === 'TODO' ? 'bg-gray-400' : status === 'IN_PROGRESS' ? 'bg-blue-500' : 'bg-green-500'}`} />
-                                    {status === 'TODO' ? 'Надо сделать' : status === 'IN_PROGRESS' ? 'В процессе' : 'Готово'}
+                                    <div className={`w-2 h-2 rounded-full shrink-0 ${TASK_STATUS_META[status].color}`} />
+                                    {TASK_STATUS_META[status].label}
                                 </div>
                                 <div className="space-y-2">
                                     {orderedTasks(status).map(task => (
@@ -840,11 +917,11 @@ export const TasksScreen = ({
                                             assignee={data.members.find(m => m.id === task.assigneeId)}
                                             epic={data.epics.find(e => e.id === task.epicId)}
                                             isDragging={draggingId === task.id}
-                                            onPointerDown={(event) => beginDrag(event, task.id)}
-                                            onPointerMove={updateDrag}
-                                            onPointerUp={finishDrag}
-                                            onPointerCancel={cancelDrag}
-                                            onStatusMove={(nextStatus) => onMoveTask(task.id, nextStatus)}
+                                            onPointerDown={task.routineTemplateId ? undefined : (event) => beginDrag(event, task.id)}
+                                            onPointerMove={task.routineTemplateId ? undefined : updateDrag}
+                                            onPointerUp={task.routineTemplateId ? undefined : finishDrag}
+                                            onPointerCancel={task.routineTemplateId ? undefined : cancelDrag}
+                                            onStatusMove={task.routineTemplateId ? undefined : (nextStatus) => onMoveTask(task.id, nextStatus)}
                                             onClick={() => {
                                                 if (!suppressClick.current) onTaskClick(task);
                                             }}

@@ -7,6 +7,10 @@ import { ShoppingItem } from './shopping.model';
 import { AppEvent } from './events.model';
 import { Note, NoteScope, NoteContentType, NoteChecklistItem } from './notes.model';
 import { FamilySettings } from './settings.model';
+import { RoutineEvent, RoutineSummary, RoutineTemplate } from './routines.model';
+import { PantryData } from './pantry.model';
+import { Wishlist } from './wishlist.model';
+import { PurchaseImportJob } from './purchase-import.model';
 
 export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY' | 'SHOP';
 
@@ -73,6 +77,28 @@ export interface AppData {
   shoppingList: ShoppingItem[];
   notes: Note[];
   events: AppEvent[];
+  capabilities?: {
+    routines: boolean;
+    pantry: boolean;
+    receiptOcr: boolean;
+    wishlists: boolean;
+  };
+  routines?: RoutineTemplate[];
+  routineEvents?: RoutineEvent[];
+  routineSummary?: RoutineSummary;
+  pantry?: PantryData;
+  wishlists?: Wishlist[];
+  dashboardPreferences?: DashboardPreferences;
+  /** Server-internal command aggregate. Public API strips it from AppData. */
+  purchaseImports?: PurchaseImportJob[];
+}
+
+export interface DashboardPreferences {
+  userId: string;
+  scope: 'PERSONAL' | 'FAMILY';
+  hiddenWidgets: string[];
+  widgetOrder: string[];
+  weatherOptIn: boolean;
 }
 
 export interface ApiEnvelope {
@@ -101,3 +127,7 @@ export type { ShoppingItem };
 export type { AppEvent };
 export type { Note, NoteScope, NoteContentType, NoteChecklistItem };
 export type { FamilySettings, NotificationDeliveryMode, TaskNotificationMode } from './settings.model';
+export type { RoutineEvent, RoutineSummary, RoutineTemplate } from './routines.model';
+export type { PantryData, PantryMovement, PantryProduct } from './pantry.model';
+export type { Wishlist, WishlistItem } from './wishlist.model';
+export type { PurchaseImportFile, PurchaseImportItem, PurchaseImportJob, PurchaseImportStatus, ReceiptOcrBlock } from './purchase-import.model';

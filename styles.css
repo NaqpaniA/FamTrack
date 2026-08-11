@@ -4,32 +4,61 @@
 
 :root {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  color-scheme: light;
+  color-scheme: light dark;
   background-color: #f5f6f8;
   color: #0f172a;
   --app-bg: #f5f6f8;
+  --app-secondary-bg: #e9eef2;
   --app-surface: #ffffff;
+  --app-text: #0f172a;
+  --app-muted: #64748b;
+  --app-accent: #2481cc;
+  --app-accent-text: #ffffff;
   --app-border: rgba(15, 23, 42, 0.08);
-  --bottom-nav-height: 64px;
-  --app-safe-top: max(env(safe-area-inset-top, 0px), var(--tg-content-safe-area-inset-top, 0px));
-  --app-safe-right: max(env(safe-area-inset-right, 0px), var(--tg-content-safe-area-inset-right, 0px));
-  --app-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-content-safe-area-inset-bottom, 0px));
-  --app-safe-left: max(env(safe-area-inset-left, 0px), var(--tg-content-safe-area-inset-left, 0px));
+  --app-radius-sm: 12px;
+  --app-radius-md: 18px;
+  --app-radius-lg: 24px;
+  --app-space: 14px;
+  --bottom-nav-height: 62px;
+  --app-visual-height: 100svh;
+  --tg-fullscreen-fallback-top: 0px;
+  --app-safe-top: max(env(safe-area-inset-top, 0px), var(--tg-safe-area-inset-top, 0px), var(--tg-content-safe-area-inset-top, 0px), var(--tg-fullscreen-fallback-top, 0px));
+  --app-safe-right: max(env(safe-area-inset-right, 0px), var(--tg-safe-area-inset-right, 0px), var(--tg-content-safe-area-inset-right, 0px));
+  --app-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px), var(--tg-content-safe-area-inset-bottom, 0px));
+  --app-safe-left: max(env(safe-area-inset-left, 0px), var(--tg-safe-area-inset-left, 0px), var(--tg-content-safe-area-inset-left, 0px));
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 html,
 body,
 #root {
   min-height: 100%;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 body {
   margin: 0;
   min-height: var(--tg-viewport-stable-height, 100svh);
   overscroll-behavior-y: none;
-  background: var(--app-bg);
-  color: #0f172a;
+  background:
+    radial-gradient(circle at 12% -10%, color-mix(in srgb, var(--app-accent) 18%, transparent), transparent 38%),
+    var(--app-bg);
+  color: var(--app-text);
   -webkit-font-smoothing: antialiased;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
 }
 
 button,
@@ -37,9 +66,16 @@ input,
 textarea,
 select {
   font: inherit;
-  color: #0f172a;
-  caret-color: #0f172a;
-  color-scheme: light;
+  color: var(--app-text);
+  caret-color: var(--app-text);
+  color-scheme: inherit;
+}
+
+input,
+textarea,
+select {
+  background-color: color-mix(in srgb, var(--app-surface) 88%, transparent);
+  border-color: var(--app-border) !important;
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -57,17 +93,21 @@ select {
 
 .app-screen {
   min-height: var(--tg-viewport-stable-height, 100svh);
+  width: 100%;
   padding:
-    calc(14px + var(--app-safe-top))
-    calc(14px + var(--app-safe-right))
-    calc(var(--bottom-nav-height) + 18px + var(--app-safe-bottom))
-    calc(14px + var(--app-safe-left));
-  background: var(--app-bg);
-  color: #0f172a;
+    calc(var(--app-space) + var(--app-safe-top))
+    calc(var(--app-space) + var(--app-safe-right))
+    calc(var(--bottom-nav-height) + 30px + var(--app-safe-bottom))
+    calc(var(--app-space) + var(--app-safe-left));
+  color: var(--app-text);
 }
 
 .telegram-shell {
   min-height: var(--tg-viewport-stable-height, 100svh);
+  max-width: 100vw;
+  overflow-x: clip;
+  background: transparent !important;
+  color: var(--app-text) !important;
 }
 
 .telegram-standalone-screen {
@@ -78,13 +118,36 @@ select {
   padding-left: calc(1.25rem + var(--app-safe-left));
 }
 
+.app-bottom-nav {
+  left: calc(10px + var(--app-safe-left));
+  right: calc(10px + var(--app-safe-right));
+  bottom: calc(8px + var(--app-safe-bottom));
+  height: var(--bottom-nav-height);
+  border: 1px solid color-mix(in srgb, var(--app-border) 85%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-surface) 82%, transparent);
+  box-shadow: 0 10px 34px rgba(15, 23, 42, 0.16);
+  overflow: hidden;
+}
+
 .bottom-nav-content {
-  padding-left: var(--app-safe-left);
-  padding-right: var(--app-safe-right);
+  height: 100%;
+  color: var(--app-muted);
 }
 
 .app-modal-sheet {
+  color: var(--app-text);
+  background: color-mix(in srgb, var(--app-surface) 94%, transparent) !important;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg) var(--app-radius-lg) 0 0;
+  max-height: min(88svh, calc(var(--app-visual-height) - var(--app-safe-top) - 12px));
+  overscroll-behavior: contain;
   padding-bottom: calc(1rem + var(--app-safe-bottom));
+}
+
+.app-modal-backdrop {
+  height: var(--app-visual-height, 100svh);
+  padding-top: var(--app-safe-top);
 }
 
 .app-toast-stack {
@@ -94,14 +157,89 @@ select {
 }
 
 .app-panel {
-  background: var(--app-surface);
+  background: color-mix(in srgb, var(--app-surface) 78%, transparent);
   border: 1px solid var(--app-border);
-  border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  color: #0f172a;
+  border-radius: var(--app-radius-md);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.07);
+  color: var(--app-text);
+  backdrop-filter: blur(18px) saturate(1.18);
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
 }
 
 .snap-x-app {
   scroll-snap-type: x mandatory;
-  scroll-padding-inline: 14px;
+  scroll-padding-inline: var(--app-space);
+  overscroll-behavior-x: contain;
+  width: calc(100vw - var(--app-safe-left) - var(--app-safe-right) - (2 * var(--app-space)));
+  padding-right: 24px;
+}
+
+.save-state-pill {
+  position: fixed;
+  z-index: 58;
+  right: calc(10px + var(--app-safe-right));
+  bottom: calc(var(--bottom-nav-height) + 18px + var(--app-safe-bottom));
+  max-width: min(58vw, 220px);
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-surface) 84%, transparent);
+  color: var(--app-text);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app-panel,
+  .app-bottom-nav,
+  .app-modal-sheet,
+  .save-state-pill {
+    background: var(--app-surface) !important;
+  }
+}
+
+[data-telegram-theme="dark"] .text-gray-950,
+[data-telegram-theme="dark"] .text-gray-900,
+[data-telegram-theme="dark"] .text-gray-800,
+[data-telegram-theme="dark"] .text-black {
+  color: var(--app-text) !important;
+}
+
+[data-telegram-theme="dark"] .text-gray-400,
+[data-telegram-theme="dark"] .text-gray-500,
+[data-telegram-theme="dark"] .text-gray-600,
+[data-telegram-theme="dark"] .text-gray-700 {
+  color: var(--app-muted) !important;
+}
+
+[data-telegram-theme="dark"] .bg-white,
+[data-telegram-theme="dark"] .bg-gray-50,
+[data-telegram-theme="dark"] .bg-gray-100,
+[data-telegram-theme="dark"] .bg-\[\#f5f6f8\] {
+  background-color: color-mix(in srgb, var(--app-surface) 88%, transparent) !important;
+}
+
+[data-telegram-theme="dark"] .border-gray-50,
+[data-telegram-theme="dark"] .border-gray-100,
+[data-telegram-theme="dark"] .border-gray-200,
+[data-telegram-theme="dark"] .border-gray-200\/70,
+[data-telegram-theme="dark"] .border-gray-200\/80 {
+  border-color: var(--app-border) !important;
+}
+
+@media (min-width: 640px) {
+  .app-modal-sheet {
+    border-radius: var(--app-radius-lg);
+    margin-bottom: var(--app-safe-bottom);
+  }
+}
+
+@media (max-width: 380px) {
+  :root {
+    --app-space: 10px;
+  }
+
+  .bottom-nav-content span {
+    font-size: 9px;
+  }
 }

@@ -1,13 +1,15 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import { AppData, FamilySettings, User } from './types';
+import { AppData, DashboardPreferences, FamilySettings, User } from './types';
 import { Task, Epic } from './tasks.model';
 import { Reward } from './family.model';
 import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, Subscription } from './finance.model';
 import { Note } from './notes.model';
 import { ShoppingCategoryType } from './shopping.model';
 import { TWA } from './utils';
+import type { RoutineTemplate } from './routines.model';
+import type { Wishlist, WishlistItem } from './wishlist.model';
 
 // Keys
 export const KEYS = {
@@ -350,6 +352,74 @@ export const useMutations = () => {
 
         checkoutShopping: useMutation({
             mutationFn: (input: { itemIds: string[]; totalAmount: number; accountId: string }) => api.checkoutShopping(input),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveRoutine: useMutation({
+            mutationFn: (routine: Partial<RoutineTemplate> & { presetId?: string }) => api.saveRoutine(routine),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        pauseRoutine: useMutation({
+            mutationFn: ({ routineId, paused }: { routineId: string; paused: boolean }) => api.pauseRoutine(routineId, paused),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        completeRoutine: useMutation({
+            mutationFn: (input: { routineId: string; taskId?: string; units?: number }) => api.completeRoutine(input),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        recordRoutineUnit: useMutation({
+            mutationFn: ({ routineId, units }: { routineId: string; units?: number }) => api.recordRoutineUnit(routineId, units),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        skipRoutine: useMutation({
+            mutationFn: (routineId: string) => api.skipRoutine(routineId),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveDashboardPreferences: useMutation({
+            mutationFn: (preferences: Partial<DashboardPreferences>) => api.saveDashboardPreferences(preferences),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveWishlist: useMutation({
+            mutationFn: (wishlist: Partial<Wishlist>) => api.saveWishlist(wishlist),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveWishlistItem: useMutation({
+            mutationFn: (item: Partial<WishlistItem> & { wishlistId: string }) => api.saveWishlistItem(item),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        deleteWishlistItem: useMutation({
+            mutationFn: ({ wishlistId, itemId }: { wishlistId: string; itemId: string }) => api.deleteWishlistItem(wishlistId, itemId),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        reserveWishlistItem: useMutation({
+            mutationFn: ({ wishlistId, itemId, reserved }: { wishlistId: string; itemId: string; reserved: boolean }) => (
+                api.reserveWishlistItem(wishlistId, itemId, reserved)
+            ),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        adjustPantry: useMutation({
+            mutationFn: (input: Parameters<typeof api.adjustPantry>[0]) => api.adjustPantry(input),
             onSuccess: syncServerData,
             onSettled: () => invalidate()
         })

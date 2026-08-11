@@ -1,14 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, ArrowRight, Bot, CheckSquare, Layout, Loader2, MessageCircle, RefreshCw, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CheckCircle2, CheckSquare, Layout, Loader2, MessageCircle, RefreshCw, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles.css';
 
-import { Tab } from './types';
+import { AppData, Tab } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account } from './finance.model';
-import { getTelegramStartParam, isVisible, TWA } from './utils';
+import { getTelegramStartParam, installTelegramShellLifecycle, isVisible, TWA } from './utils';
 import { useAppStore } from './store';
 import { api } from './api';
 import { KEYS } from './queries';
@@ -35,18 +35,13 @@ const queryClient = new QueryClient({
 
 const useTelegramShell = () => {
   useEffect(() => {
+      const cleanup = installTelegramShellLifecycle();
       TWA.ready();
       TWA.expand();
-      TWA.setHeaderColor('#f5f6f8');
-      TWA.setBackgroundColor('#f5f6f8');
-      TWA.setBottomBarColor('#ffffff');
       TWA.disableVerticalSwipes();
       TWA.requestFullscreen();
       TWA.enableClosingConfirmation();
-      document.documentElement.style.setProperty('color-scheme', 'light');
-      document.body.style.backgroundColor = '#f5f6f8';
-      document.body.style.color = '#0f172a';
-      document.body.style.setProperty('color-scheme', 'light');
+      return cleanup;
   }, []);
 };
 
@@ -161,6 +156,16 @@ const FamTrackApp = () => {
   } = useAppStore();
   
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
+  const [saveState, setSaveState] = useState(api.getSaveState());
+
+  useEffect(() => {
+      const unsubscribeState = api.subscribeSaveState(setSaveState);
+      const unsubscribeData = api.subscribeData(nextData => queryClient.setQueryData<AppData>(KEYS.DATA, nextData));
+      return () => {
+          unsubscribeState();
+          unsubscribeData();
+      };
+  }, []);
   
   // Modal State
   const [isTaskModalOpen, setTaskModalOpen] = useState(false);
@@ -309,6 +314,29 @@ const FamTrackApp = () => {
 
   return (
     <div className="telegram-shell text-gray-950 font-sans selection:bg-blue-100 transition-colors duration-300 bg-[#f5f6f8]">
+       <button
+          type="button"
+          className="save-state-pill min-h-9 px-3 py-2 text-xs font-bold flex items-center justify-center gap-2"
+          onClick={() => saveState.status !== 'SAVED' && api.retryOutbox()}
+          disabled={saveState.status === 'SAVED'}
+          aria-live="polite"
+          title={saveState.message || undefined}
+       >
+          {saveState.status === 'SAVED' ? (
+              <CheckCircle2 size={15} className="text-emerald-500" />
+          ) : saveState.status === 'SAVING' ? (
+              <Loader2 size={15} className="animate-spin text-blue-500" />
+          ) : (
+              <AlertTriangle size={15} className="text-amber-500" />
+          )}
+          <span>
+              {saveState.status === 'SAVED'
+                  ? 'Сохранено'
+                  : saveState.status === 'SAVING'
+                      ? `Сохраняется${saveState.pending > 1 ? ` · ${saveState.pending}` : ''}`
+                      : `Нужна проверка${saveState.pending > 1 ? ` · ${saveState.pending}` : ''}`}
+          </span>
+       </button>
        <ToastContainer toasts={toasts} removeToast={removeToast} />
        
        {/* Daily Bonus Modal */}
@@ -335,6 +363,18 @@ const FamTrackApp = () => {
                 onOpenProfile={() => setSettingsOpen(true)}
                 onOpenNotes={() => openNotes('list')}
                 onAddNote={() => openNotes('new')}
+                householdActions={{
+                    saveRoutine: actions.routines.save,
+                    pauseRoutine: actions.routines.pause,
+                    completeRoutine: actions.routines.complete,
+                    recordRoutineUnit: actions.routines.recordUnit,
+                    skipRoutine: actions.routines.skip,
+                    savePreferences: actions.routines.savePreferences,
+                    saveWishlist: actions.wishlists.save,
+                    saveWishlistItem: actions.wishlists.saveItem,
+                    deleteWishlistItem: actions.wishlists.deleteItem,
+                    reserveWishlistItem: actions.wishlists.reserve
+                }}
               />
           )}
           {activeTab === 'TASKS' && (
@@ -360,6 +400,7 @@ const FamTrackApp = () => {
                   onToggleItem={actions.shopping.toggle}
                   onDeleteItem={actions.shopping.delete}
                   onCheckout={actions.shopping.checkout}
+                  onAdjustPantry={actions.pantry.adjust}
               />
           )}
           {activeTab === 'FINANCE' && (
@@ -403,6 +444,7 @@ const FamTrackApp = () => {
               task={editingTask} 
               members={data.members} 
               epics={data.epics.filter(e => isVisible(e, data.currentUser))}
+              availableTasks={data.tasks.filter(t => isVisible(t, data.currentUser))}
               currentUser={data.currentUser}
               onSave={handleTaskSave} 
               onDelete={handleTaskDelete} 

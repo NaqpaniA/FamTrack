@@ -87,8 +87,8 @@ export const BottomNav = ({
   items: Array<{ id: Tab, label: string, icon: IconComponent }>,
   onNavigate: (tab: Tab) => void
 }) => (
-  <nav className="fixed bottom-0 inset-x-0 z-50 bg-white/95 backdrop-blur-md border-t border-gray-200/80 shadow-[0_-6px_24px_rgba(15,23,42,0.06)] safe-bottom">
-    <div className="bottom-nav-content h-16 max-w-2xl mx-auto grid grid-cols-5">
+  <nav className="app-bottom-nav fixed z-50 backdrop-blur-md" aria-label="Основная навигация">
+    <div className="bottom-nav-content max-w-2xl mx-auto grid grid-cols-5">
       {items.map(item => {
         const active = item.id === activeTab;
         const Icon = item.icon;
@@ -263,7 +263,7 @@ export const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean, o
   }, [isOpen, onClose]);
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+    <div className="app-modal-backdrop fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="app-modal-sheet bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-4 max-h-[88svh] overflow-y-auto animate-in slide-in-from-bottom-10 duration-300 shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 id={titleId} className="text-lg font-bold">{title}</h3>
@@ -280,8 +280,8 @@ export const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean, o
 export const StreakModal = ({ isOpen, onClose, streak, xp }: { isOpen: boolean, onClose: () => void, streak: number, xp: number }) => {
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300" onClick={onClose}>
-             <div className="bg-white w-full max-w-xs rounded-3xl p-6 text-center relative shadow-2xl animate-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
+        <div className="app-modal-backdrop fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300" onClick={onClose}>
+             <div className="app-modal-sheet bg-white w-full max-w-xs rounded-3xl p-6 text-center relative shadow-2xl animate-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
                  <div className="absolute -top-10 left-1/2 transform -translate-x-1/2">
                      <div className="bg-orange-500 text-white p-6 rounded-full shadow-lg border-4 border-white">
                          <Flame size={40} fill="currentColor" className="animate-pulse" />

@@ -197,7 +197,7 @@ test('repeating the same command is idempotent and a reused mutation id is rejec
     const receipt = {
         mutationId: 'mutation-retry',
         actorId: actor.id,
-        operation: '/api/rewards/purchase',
+        operation: '/api/budgets/save',
         requestHash: 'same-payload'
     };
     let applications = 0;
@@ -220,6 +220,40 @@ test('repeating the same command is idempotent and a reused mutation id is rejec
         }, applyOnce, actor),
         MutationIdConflictError
     );
+    db.close();
+});
+
+test('route-scoped commands reject writes outside their registered collections', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const before = db.exportEnvelope();
+    const actor = before.data.currentUser;
+
+    assert.throws(
+        () => db.mutateCommand(before.data.family!.id, before.revision, {
+            mutationId: 'mutation-write-set-violation',
+            actorId: actor.id,
+            operation: '/api/tasks/save',
+            requestHash: 'write-set-violation'
+        }, data => ({
+            ...data,
+            notes: [{
+                id: 'note-outside-write-set',
+                scope: 'FAMILY',
+                contentType: 'TEXT',
+                title: 'Should not persist',
+                body: '',
+                checklistItems: [],
+                createdById: actor.id,
+                isPinned: false,
+                isArchived: false,
+                createdAt: 1,
+                updatedAt: 1
+            }, ...data.notes]
+        }), actor),
+        /write set.*misses: notes/i
+    );
+    assert.equal(db.getRevision(), before.revision);
+    assert.deepEqual(db.getAppData().notes, before.data.notes);
     db.close();
 });
 

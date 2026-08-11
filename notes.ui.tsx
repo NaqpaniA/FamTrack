@@ -175,9 +175,9 @@ export const NotesSheet = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+    <div className="app-modal-backdrop fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
       <div
-        className="absolute inset-x-0 bottom-0 mx-auto max-w-2xl h-[92svh] bg-[#f5f6f8] rounded-t-3xl shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom-10 duration-300"
+        className="app-modal-sheet absolute inset-x-0 bottom-0 mx-auto max-w-2xl h-[min(92svh,var(--app-visual-height))] rounded-t-3xl shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom-10 duration-300"
         onClick={event => event.stopPropagation()}
       >
         <div className="px-4 pt-3 pb-2 bg-white/95 border-b border-gray-200/80 shrink-0">
