@@ -87,14 +87,15 @@ The hotfix quiesced snapshot preserved revision 128 and 59 audited tenant rows:
 /home/naqpania/apps/famtrack/backups/releases/20260811T193855Z-25506/final.sqlite
 ```
 
-After reopening clients, revision advanced to 129. Its current mode-`0600`
-emergency snapshot passed `quick_check` and the no-decrease comparison:
+After reopening clients, revision first advanced to 129 and then to 130 with
+one additional task row. The current mode-`0600` emergency snapshot passed
+`quick_check` and the no-decrease comparison:
 
 ```text
-/home/naqpania/apps/famtrack/backups/releases/20260811T193855Z-25506/emergency-post-open-r129.sqlite
+/home/naqpania/apps/famtrack/backups/releases/20260811T193855Z-25506/emergency-post-open-r130.sqlite
 ```
 
-The effective rollback floor is now revision 129 or later.
+The effective rollback floor is now revision 130 or later.
 
 ## Scope now in production
 
