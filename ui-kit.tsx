@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useEffect, useId, useState } from 'react';
 import { 
   X, 
   CheckCircle2, 
@@ -9,6 +9,7 @@ import {
   Flame
 } from 'lucide-react';
 import { Tab, User, ToastMessage } from './types';
+import { getTelegramInitData } from './utils';
 
 type IconComponent = React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
 
@@ -41,11 +42,11 @@ export const SegmentedControl = <T extends string>({
   className = ''
 }: {
   value: T,
-  options: Array<{ value: T, label?: string, icon?: IconComponent }>,
+  options: Array<{ value: T, label?: string, icon?: IconComponent, ariaLabel?: string }>,
   onChange: (value: T) => void,
   className?: string
 }) => (
-  <div className={`inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200/70 ${className}`}>
+  <div role="group" className={`inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200/70 ${className}`}>
     {options.map(option => {
       const Icon = option.icon;
       const active = option.value === value;
@@ -53,8 +54,9 @@ export const SegmentedControl = <T extends string>({
         <button
           key={option.value}
           onClick={() => onChange(option.value)}
-          className={`min-h-9 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${active ? 'bg-white text-gray-950 shadow-sm' : 'text-gray-500'}`}
+          className={`min-h-9 shrink-0 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${active ? 'bg-white text-gray-950 shadow-sm' : 'text-gray-500'}`}
           aria-pressed={active}
+          aria-label={option.ariaLabel || option.label || option.value}
         >
           {Icon && <Icon size={17} strokeWidth={active ? 2.5 : 2} />}
           {option.label && <span>{option.label}</span>}
@@ -70,7 +72,7 @@ export const FloatingActionButton = ({ onClick, icon: Icon, label }: { onClick: 
     aria-label={label}
     title={label}
     className="fixed right-4 z-40 w-12 h-12 rounded-2xl bg-black text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform"
-    style={{ bottom: 'calc(var(--bottom-nav-height) + 14px + env(safe-area-inset-bottom))' }}
+    style={{ bottom: 'calc(var(--bottom-nav-height) + 14px + var(--app-safe-bottom))' }}
   >
     <Icon size={22} />
   </button>
@@ -86,7 +88,7 @@ export const BottomNav = ({
   onNavigate: (tab: Tab) => void
 }) => (
   <nav className="fixed bottom-0 inset-x-0 z-50 bg-white/95 backdrop-blur-md border-t border-gray-200/80 shadow-[0_-6px_24px_rgba(15,23,42,0.06)] safe-bottom">
-    <div className="h-16 max-w-2xl mx-auto grid grid-cols-5">
+    <div className="bottom-nav-content h-16 max-w-2xl mx-auto grid grid-cols-5">
       {items.map(item => {
         const active = item.id === activeTab;
         const Icon = item.icon;
@@ -112,15 +114,96 @@ export const Card = ({ children, className = '', onClick }: { children?: React.R
   </div>
 );
 
+type AvatarProxyCacheEntry = {
+  expiresAt: number;
+  url?: string;
+  promise?: Promise<string | undefined>;
+};
+
+const avatarProxyCache = new Map<string, AvatarProxyCacheEntry>();
+const AVATAR_PROXY_TTL_MS = 15 * 60 * 1000;
+const AVATAR_PROXY_NEGATIVE_TTL_MS = 5 * 60 * 1000;
+const AVATAR_PROXY_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const loadAvatarProxyUrl = (userId: string) => {
+  const now = Date.now();
+  const cached = avatarProxyCache.get(userId);
+  if (cached?.promise) return cached.promise;
+  if (cached && cached.expiresAt > now) return Promise.resolve(cached.url);
+  if (cached?.url) URL.revokeObjectURL(cached.url);
+  avatarProxyCache.delete(userId);
+
+  const promise = (async () => {
+    try {
+      const initData = getTelegramInitData();
+      const response = await fetch(`/api/users/${encodeURIComponent(userId)}/avatar`, {
+        headers: initData ? { 'X-Telegram-Init-Data': initData } : {}
+      });
+      if (!response.ok) return undefined;
+      const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+      if (!contentType || !AVATAR_PROXY_CONTENT_TYPES.has(contentType)) return undefined;
+      const blob = await response.blob();
+      if (blob.size === 0) return undefined;
+      return URL.createObjectURL(blob);
+    } catch {
+      return undefined;
+    }
+  })().then(url => {
+    avatarProxyCache.set(userId, {
+      url,
+      expiresAt: Date.now() + (url ? AVATAR_PROXY_TTL_MS : AVATAR_PROXY_NEGATIVE_TTL_MS)
+    });
+    return url;
+  });
+  avatarProxyCache.set(userId, { expiresAt: now + AVATAR_PROXY_NEGATIVE_TTL_MS, promise });
+  return promise;
+};
+
+const AvatarImage = ({ user }: { key?: React.Key, user?: User }) => {
+  const directAvatarUrl = user?.avatarUrl?.startsWith('https://') ? user.avatarUrl : undefined;
+  const [failedUrl, setFailedUrl] = useState<string>();
+  const [proxyAvatarUrl, setProxyAvatarUrl] = useState<string>();
+  const directAvatarFailed = !!directAvatarUrl && failedUrl === directAvatarUrl;
+
+  useEffect(() => {
+    let active = true;
+    if (!user?.id || !user.telegramId || (directAvatarUrl && !directAvatarFailed)) {
+      return () => { active = false; };
+    }
+    loadAvatarProxyUrl(user.id).then(url => {
+      if (active) setProxyAvatarUrl(url);
+    });
+    return () => { active = false; };
+  }, [user?.id, user?.telegramId, directAvatarUrl, directAvatarFailed]);
+
+  const avatarUrl = directAvatarUrl && !directAvatarFailed
+    ? directAvatarUrl
+    : proxyAvatarUrl && failedUrl !== proxyAvatarUrl ? proxyAvatarUrl : undefined;
+  return avatarUrl && failedUrl !== avatarUrl ? (
+    <img
+      src={avatarUrl}
+      alt={user ? `Аватар ${user.name}` : 'Аватар'}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailedUrl(avatarUrl)}
+      className="h-full w-full object-cover"
+    />
+  ) : (
+    <span aria-hidden="true">{user ? user.avatar : '?'}</span>
+  );
+};
+
 export const Avatar = ({ user, size = 'sm', selected = false, onClick }: { key?: React.Key, user?: User, size?: 'sm' | 'md' | 'lg' | 'xl', selected?: boolean, onClick?: () => void }) => {
   const sizes = { sm: 'w-7 h-7 text-xs', md: 'w-9 h-9 text-base', lg: 'w-12 h-12 text-xl', xl: 'w-16 h-16 text-3xl' };
-  return (
-    <div 
-      onClick={onClick}
-      className={`${sizes[size]} rounded-full flex items-center justify-center bg-gray-100 border transition-all cursor-pointer ${selected ? 'border-blue-500 ring-2 ring-blue-100 scale-105' : 'border-white'}`}
-    >
-      {user ? user.avatar : '?'}
-    </div>
+  const directAvatarUrl = user?.avatarUrl?.startsWith('https://') ? user.avatarUrl : '';
+  const className = `${sizes[size]} rounded-full overflow-hidden flex items-center justify-center bg-gray-100 border transition-all ${onClick ? 'cursor-pointer' : ''} ${selected ? 'border-blue-500 ring-2 ring-blue-100 scale-105' : 'border-white'}`;
+  const content = <AvatarImage key={`${user?.id || 'unknown'}:${directAvatarUrl}`} user={user} />;
+  return onClick ? (
+    <button type="button" onClick={onClick} className={className} aria-label={user ? `Выбрать ${user.name}` : 'Выбрать участника'} aria-pressed={selected}>
+      {content}
+    </button>
+  ) : (
+    <div className={className}>{content}</div>
   );
 };
 
@@ -169,13 +252,22 @@ export const VisibilitySelector = ({ members, selectedIds = [], onChange }: { me
 };
 
 export const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean, onClose: () => void, title: string, children?: React.ReactNode }) => {
+  const titleId = useId();
+  useEffect(() => {
+    if (!isOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isOpen, onClose]);
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
-      <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-4 max-h-[88svh] overflow-y-auto animate-in slide-in-from-bottom-10 duration-300 shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="app-modal-sheet bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-4 max-h-[88svh] overflow-y-auto animate-in slide-in-from-bottom-10 duration-300 shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold">{title}</h3>
-          <button onClick={onClose} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200">
+          <h3 id={titleId} className="text-lg font-bold">{title}</h3>
+          <button type="button" onClick={onClose} aria-label="Закрыть" className="p-2 bg-gray-100 rounded-full hover:bg-gray-200">
             <X size={20} />
           </button>
         </div>
@@ -221,12 +313,18 @@ export const StreakModal = ({ isOpen, onClose, streak, xp }: { isOpen: boolean, 
 
 export const ToastContainer = ({ toasts, removeToast }: { toasts: ToastMessage[], removeToast: (id: string) => void }) => {
     return (
-        <div className="fixed top-4 left-0 right-0 z-[70] flex flex-col items-center gap-2 pointer-events-none px-4">
+        <div aria-live="polite" aria-atomic="false" className="app-toast-stack fixed left-0 right-0 z-[70] flex flex-col items-center gap-2 pointer-events-none">
             {toasts.map(t => (
-                <div key={t.id} className="bg-black/80 text-white px-4 py-2 rounded-full shadow-lg backdrop-blur-md text-sm animate-in slide-in-from-top-2 fade-in duration-300 flex items-center gap-2 pointer-events-auto">
+                <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => removeToast(t.id)}
+                    aria-label={`Закрыть уведомление: ${t.message}`}
+                    className="bg-black/80 text-white px-4 py-2 rounded-full shadow-lg backdrop-blur-md text-sm animate-in slide-in-from-top-2 fade-in duration-300 flex items-center gap-2 pointer-events-auto"
+                >
                      {t.type === 'SUCCESS' ? <CheckCircle2 size={16} className="text-green-400" /> : <Calendar size={16} className="text-blue-400" />}
                      {t.message}
-                </div>
+                </button>
             ))}
         </div>
     )

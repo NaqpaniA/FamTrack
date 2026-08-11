@@ -1,14 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowRight, Bot, CheckSquare, Layout, Loader2, MessageCircle, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CheckSquare, Layout, Loader2, MessageCircle, RefreshCw, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles.css';
 
 import { Tab } from './types';
 import { Task, Epic } from './tasks.model';
 import { Transaction, Account } from './finance.model';
-import { isVisible, TWA } from './utils';
+import { getTelegramStartParam, isVisible, TWA } from './utils';
 import { useAppStore } from './store';
 import { api } from './api';
 import { KEYS } from './queries';
@@ -37,6 +37,11 @@ const useTelegramShell = () => {
   useEffect(() => {
       TWA.ready();
       TWA.expand();
+      TWA.setHeaderColor('#f5f6f8');
+      TWA.setBackgroundColor('#f5f6f8');
+      TWA.setBottomBarColor('#ffffff');
+      TWA.disableVerticalSwipes();
+      TWA.requestFullscreen();
       TWA.enableClosingConfirmation();
       document.documentElement.style.setProperty('color-scheme', 'light');
       document.body.style.backgroundColor = '#f5f6f8';
@@ -45,7 +50,12 @@ const useTelegramShell = () => {
   }, []);
 };
 
-const readInviteToken = () => new URLSearchParams(window.location.search).get('invite');
+const readInviteToken = () => {
+  const queryToken = new URLSearchParams(window.location.search).get('invite');
+  if (queryToken) return queryToken;
+  const startParam = getTelegramStartParam();
+  return startParam.startsWith('fi_') ? startParam : null;
+};
 
 const InviteOnboardingScreen = ({ token, onAccepted }: { token: string, onAccepted: () => void }) => {
   const [isAccepting, setAccepting] = useState(false);
@@ -71,7 +81,7 @@ const InviteOnboardingScreen = ({ token, onAccepted }: { token: string, onAccept
   };
 
   return (
-    <div className="min-h-[100svh] bg-[#f5f6f8] text-gray-950 px-5 py-6 flex flex-col">
+    <div className="telegram-standalone-screen bg-[#f5f6f8] text-gray-950 flex flex-col">
       <div className="max-w-md mx-auto w-full flex-1 flex flex-col gap-5">
         <div className="rounded-[18px] overflow-hidden border border-gray-200 bg-white shadow-sm">
           <img
@@ -136,7 +146,19 @@ const InviteOnboardingScreen = ({ token, onAccepted }: { token: string, onAccept
 };
 
 const FamTrackApp = () => {
-  const { data, isLoading, toasts, bonusData, removeToast, closeBonusModal, actions } = useAppStore();
+  const {
+    data,
+    isLoading,
+    isError,
+    isReady,
+    loadError,
+    retryLoad,
+    toasts,
+    bonusData,
+    removeToast,
+    closeBonusModal,
+    actions
+  } = useAppStore();
   
   const [activeTab, setActiveTab] = useState<Tab>('DASHBOARD');
   
@@ -162,11 +184,11 @@ const FamTrackApp = () => {
 
   // --- Daily Streak Check ---
   useEffect(() => {
-      if (!isLoading && data.currentUser) {
+      if (isReady && data.currentUser.id) {
           // Check streaks whenever data loads or user changes
           actions.app.checkDailyStreak();
       }
-  }, [isLoading, data.currentUser?.id]);
+  }, [isReady, data.currentUser.id]);
 
   // --- Handlers ---
 
@@ -241,10 +263,40 @@ const FamTrackApp = () => {
   
   if (isLoading) {
       return (
-          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="telegram-standalone-screen flex items-center justify-center bg-gray-50">
               <Loader2 className="animate-spin text-gray-400" size={32} />
           </div>
       )
+  }
+
+  if (isError) {
+      const message = loadError instanceof Error
+          ? loadError.message
+          : 'Не удалось загрузить данные семьи';
+      return (
+          <div className="telegram-standalone-screen flex items-center justify-center bg-[#f5f6f8] text-gray-950">
+              <div className="w-full max-w-sm rounded-[20px] border border-red-100 bg-white p-6 text-center shadow-sm">
+                  <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-600">
+                      <AlertTriangle size={24} />
+                  </div>
+                  <h1 className="text-xl font-black">Данные не загружены</h1>
+                  <p className="mt-2 text-sm leading-relaxed text-gray-500">
+                      FamTrack не показывает демо-данные вместо вашей семьи. Проверьте соединение и повторите загрузку.
+                  </p>
+                  <p className="mt-3 rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-500 break-words">
+                      {message}
+                  </p>
+                  <button
+                      type="button"
+                      onClick={() => void retryLoad()}
+                      className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gray-950 text-sm font-bold text-white active:scale-[0.98]"
+                  >
+                      <RefreshCw size={18} />
+                      Повторить загрузку
+                  </button>
+              </div>
+          </div>
+      );
   }
 
   const navItems = [
@@ -256,7 +308,7 @@ const FamTrackApp = () => {
   ];
 
   return (
-    <div className="min-h-[100svh] text-gray-950 font-sans selection:bg-blue-100 transition-colors duration-300 bg-[#f5f6f8]">
+    <div className="telegram-shell text-gray-950 font-sans selection:bg-blue-100 transition-colors duration-300 bg-[#f5f6f8]">
        <ToastContainer toasts={toasts} removeToast={removeToast} />
        
        {/* Daily Bonus Modal */}
@@ -272,11 +324,12 @@ const FamTrackApp = () => {
        <BottomNav activeTab={activeTab} items={navItems} onNavigate={handleNavigate} />
 
        {/* Main Content Area */}
-       <div className="min-h-[100svh] relative">
+       <div className="telegram-shell relative">
           {activeTab === 'DASHBOARD' && (
               <DashboardScreen 
                 data={data} 
                 onTaskClick={t => { setEditingTask(t); setTaskModalOpen(true); }} 
+                onTaskStatusChange={actions.tasks.toggleStatus}
                 onNavigate={handleNavigate}
                 onAddEpic={() => openEpicModal()}
                 onOpenProfile={() => setSettingsOpen(true)}
@@ -333,6 +386,9 @@ const FamTrackApp = () => {
                 onSaveUser={actions.family.saveUser}
                 onArchiveUser={actions.family.archiveUser}
                 onRestoreUser={actions.family.restoreUser}
+                onSaveSettings={actions.family.saveSettings}
+                onSaveReward={actions.family.saveReward}
+                onArchiveReward={actions.family.archiveReward}
                 onBuyReward={actions.family.buyReward}
                 onConsumeItem={actions.family.consumeItem}
               />

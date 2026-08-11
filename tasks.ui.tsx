@@ -19,12 +19,38 @@ import {
   Kanban,
   Sparkles
 } from 'lucide-react';
-import { Task, Epic, SubTask, Priority, TaskStatus, PRIORITIES, isOverdue, isToday } from './tasks.model';
+import {
+  Task,
+  Epic,
+  SubTask,
+  Priority,
+  TaskDifficulty,
+  TaskStatus,
+  PRIORITIES,
+  TASK_DIFFICULTIES,
+  calculateTaskXp,
+  isOverdue,
+  isToday
+} from './tasks.model';
 import { User, AppData } from './types'; // AppData needed for Screen props
 import { Avatar, FloatingActionButton, Panel, Screen, SegmentedControl, VisibilitySelector } from './ui-kit';
 import { formatMoney, isVisible } from './utils'; // Generic utils
 import { FinancialGoal } from './finance.model';
 import { api } from './api';
+import type { TaskNotificationMode } from './settings.model';
+
+const reminderClock = (timestamp?: string) => {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '';
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
+
+const reminderTimestamp = (date: string, clock: string) => {
+    if (!date || !clock) return undefined;
+    const value = new Date(`${date}T${clock}:00`);
+    return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
+};
 
 // --- Components ---
 
@@ -35,7 +61,7 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
   const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
   const today = isToday(task.dueDate) && task.status !== 'DONE';
 
-  const handleCheck = (e: React.MouseEvent) => {
+  const handleCheck = (e: React.MouseEvent<HTMLButtonElement>) => {
       e.stopPropagation();
       if (onStatusChange) {
           const nextStatus = task.status === 'DONE' ? 'TODO' : 'DONE';
@@ -46,12 +72,15 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
   return (
     <div className={`flex items-start gap-3 py-2.5 border-b border-gray-50 last:border-0 animate-in fade-in duration-300 ${task.status === 'DONE' ? 'opacity-60' : ''}`}>
       <button 
+        type="button"
         onClick={handleCheck}
+        aria-label={task.status === 'DONE' ? `Вернуть задачу «${task.title}»` : `Завершить задачу «${task.title}»`}
+        title={task.status === 'DONE' ? 'Вернуть в работу' : 'Завершить'}
         className={`mt-1 transition-colors active:scale-90 transform ${task.status === 'DONE' ? 'text-green-500' : 'text-gray-300 hover:text-gray-400'}`}
       >
         {task.status === 'DONE' ? <CheckCircle2 size={24} className="fill-green-50" /> : <Circle size={24} />}
       </button>
-      <div className="flex-1 cursor-pointer select-none" onClick={() => onClick(task)}>
+      <button type="button" className="flex-1 cursor-pointer select-none text-left" onClick={() => onClick(task)}>
         <div className="flex items-center gap-2 mb-1">
            {epic && (
                <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded uppercase tracking-wide">
@@ -97,7 +126,7 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
             </div>
           )}
         </div>
-      </div>
+      </button>
     </div>
   );
 };
@@ -108,32 +137,44 @@ export const KanbanCard: React.FC<{
     assignee?: User,
     epic?: Epic,
     onClick: () => void,
-    onPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void,
-    onPointerMove?: (event: React.PointerEvent<HTMLDivElement>) => void,
-    onPointerUp?: (event: React.PointerEvent<HTMLDivElement>) => void,
-    onPointerCancel?: (event: React.PointerEvent<HTMLDivElement>) => void,
+    onPointerDown?: (event: React.PointerEvent<HTMLButtonElement>) => void,
+    onPointerMove?: (event: React.PointerEvent<HTMLButtonElement>) => void,
+    onPointerUp?: (event: React.PointerEvent<HTMLButtonElement>) => void,
+    onPointerCancel?: (event: React.PointerEvent<HTMLButtonElement>) => void,
+    onStatusMove?: (status: TaskStatus) => void,
     isDragging?: boolean
-}> = ({ task, assignee, epic, onClick, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, isDragging }) => {
+}> = ({ task, assignee, epic, onClick, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onStatusMove, isDragging }) => {
     const priorityConfig = PRIORITIES[task.priority];
     const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
 
     return (
-        <div
+        <button
+            type="button"
             data-kanban-task={task.id}
-            role="button"
-            tabIndex={0}
             onClick={onClick}
+            aria-label={`Открыть задачу «${task.title}». Стрелки влево и вправо меняют статус.`}
             onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
                     onClick();
+                    return;
+                }
+                if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && onStatusMove) {
+                    const statuses: TaskStatus[] = ['TODO', 'IN_PROGRESS', 'DONE'];
+                    const currentIndex = statuses.indexOf(task.status);
+                    const direction = event.key === 'ArrowLeft' ? -1 : 1;
+                    const nextStatus = statuses[currentIndex + direction];
+                    if (nextStatus) {
+                        event.preventDefault();
+                        onStatusMove(nextStatus);
+                    }
                 }
             }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerCancel}
-            className={`touch-none select-none bg-white p-2.5 rounded-[12px] shadow-sm border mb-2 active:scale-95 transition-transform ${isDragging ? 'opacity-60 border-blue-300 ring-2 ring-blue-100' : 'border-gray-100'}`}
+            className={`w-full touch-none select-none bg-white p-2.5 rounded-[12px] shadow-sm border mb-2 active:scale-95 transition-transform text-left ${isDragging ? 'opacity-60 border-blue-300 ring-2 ring-blue-100' : 'border-gray-100'}`}
         >
             <div className="flex justify-between items-start gap-2 mb-2">
                 <div className="flex items-center gap-1 min-w-0">
@@ -161,7 +202,7 @@ export const KanbanCard: React.FC<{
                     <Trophy size={10} /> {task.points}
                  </span>
             </div>
-        </div>
+        </button>
     )
 }
 
@@ -171,15 +212,18 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Priority>(task?.priority || 'MEDIUM');
-  const [points, setPoints] = useState(task?.points || 50);
+  const [difficulty, setDifficulty] = useState<TaskDifficulty>(task?.difficulty || 'MEDIUM');
+  const points = calculateTaskXp(difficulty, priority);
   const [assigneeId, setAssigneeId] = useState(task?.assigneeId || currentUser.id);
   const [epicId, setEpicId] = useState(task?.epicId || '');
   const [dueDate, setDueDate] = useState(task?.dueDate || new Date().toISOString().split('T')[0]);
+  const [reminderTime, setReminderTime] = useState(reminderClock(task?.reminderTime));
   const [isRecurring, setIsRecurring] = useState(task?.isRecurring || false);
   const [frequency, setFrequency] = useState(task?.frequency || 'WEEKLY');
   const [subtasks, setSubtasks] = useState<SubTask[]>(task?.subtasks || []);
   const [newSubtask, setNewSubtask] = useState('');
   const [visibleTo, setVisibleTo] = useState<string[]>(task?.visibleTo || []);
+  const [notificationMode, setNotificationMode] = useState<TaskNotificationMode>(task?.notificationMode || 'INHERIT');
   const [isBreakingDown, setBreakingDown] = useState(false);
 
   const handleAddSubtask = () => {
@@ -195,6 +239,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       title,
       description,
       priority,
+      difficulty,
       points,
       assigneeId,
       createdById: task?.createdById || currentUser.id,
@@ -204,9 +249,11 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       createdAt: task?.createdAt || Date.now(),
       sortOrder: task?.sortOrder,
       dueDate,
+      reminderTime: reminderTimestamp(dueDate, reminderTime),
       isRecurring,
       frequency: isRecurring ? frequency : undefined,
-      visibleTo
+      visibleTo,
+      notificationMode
     });
   };
 
@@ -230,6 +277,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
   return (
     <div className="space-y-4 pb-20">
       <input 
+        aria-label="Название задачи"
         className="w-full text-xl font-bold placeholder-gray-300 outline-none border-none bg-transparent" 
         placeholder="Что нужно сделать?" 
         value={title}
@@ -240,23 +288,43 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
           {Object.entries(PRIORITIES).map(([key, val]) => (
               <button 
+                type="button"
                 key={key}
                 onClick={() => setPriority(key as Priority)}
+                aria-pressed={priority === key}
                 className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1 border ${priority === key ? val.color + ' border-transparent' : 'bg-white text-gray-500 border-gray-200'}`}
               >
                   <Flag size={12} className={priority === key ? 'fill-current' : ''} /> {val.label}
               </button>
           ))}
-          <div className="w-px h-6 bg-gray-200 mx-1" />
-          <div className="flex items-center gap-1 px-3 py-1.5 bg-yellow-50 text-yellow-700 rounded-full border border-yellow-200">
-             <span className="text-xs font-bold">XP</span>
-             <input 
-                type="number" 
-                value={points} 
-                onChange={e => setPoints(Number(e.target.value))} 
-                className="w-10 bg-transparent text-center font-bold outline-none text-xs" 
-             />
-          </div>
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <label className="text-xs font-bold text-gray-400 uppercase">Сложность</label>
+          <span className="flex items-center gap-1 rounded-full border border-yellow-200 bg-yellow-50 px-3 py-1 text-xs font-bold text-yellow-700">
+            <Trophy size={12} /> {points} XP
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {Object.entries(TASK_DIFFICULTIES).map(([key, value]) => (
+            <button
+              type="button"
+              key={key}
+              onClick={() => setDifficulty(key as TaskDifficulty)}
+              aria-pressed={difficulty === key}
+              title={value.hint}
+              className={`rounded-xl border px-2 py-2 text-xs font-bold ${difficulty === key
+                ? 'border-black bg-black text-white'
+                : 'border-gray-200 bg-white text-gray-500'}`}
+            >
+              {value.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-[11px] text-gray-400">
+          XP рассчитывается автоматически по сложности и приоритету.
+        </p>
       </div>
 
       <div className="space-y-3">
@@ -280,6 +348,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                    <div className="relative">
                        <input 
                             type="date" 
+                            aria-label="Срок задачи"
                             value={dueDate} 
                             onChange={e => setDueDate(e.target.value)}
                             className="w-full bg-gray-50 rounded-lg p-2 text-sm outline-none border border-gray-100 focus:border-blue-200" 
@@ -289,6 +358,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                <div>
                    <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Проект</label>
                    <select 
+                        aria-label="Проект задачи"
                         value={epicId} 
                         onChange={e => setEpicId(e.target.value)}
                         className="w-full bg-gray-50 rounded-lg p-2 text-sm outline-none border border-gray-100 focus:border-blue-200"
@@ -299,6 +369,37 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                </div>
            </div>
 
+           <div className="grid grid-cols-2 gap-3">
+               <label className="space-y-1">
+                   <span className="text-xs font-bold text-gray-400 uppercase block">Напомнить</span>
+                   <input
+                        type="time"
+                        value={reminderTime}
+                        onChange={event => setReminderTime(event.target.value)}
+                        className="w-full bg-gray-50 rounded-lg p-2 text-sm outline-none border border-gray-100 focus:border-blue-200"
+                   />
+               </label>
+               <label className="space-y-1">
+                   <span className="text-xs font-bold text-gray-400 uppercase block">Куда отправить</span>
+                   <select
+                        value={notificationMode}
+                        onChange={event => setNotificationMode(event.target.value as TaskNotificationMode)}
+                        className="w-full bg-gray-50 rounded-lg p-2 text-sm outline-none border border-gray-100 focus:border-blue-200"
+                   >
+                       <option value="INHERIT">Как в семье</option>
+                       <option value="PRIVATE">Лично</option>
+                       <option value="GROUP">В группу</option>
+                       <option value="BOTH">Лично и в группу</option>
+                       <option value="OFF">Не напоминать</option>
+                   </select>
+               </label>
+           </div>
+           {visibleTo.length > 0 ? (
+               <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                   Приватная задача никогда не отправляется в общий чат — только выбранным участникам лично.
+               </p>
+           ) : null}
+
            <div className="bg-gray-50 p-3 rounded-xl flex items-center justify-between">
                <div className="flex items-center gap-2">
                    <Repeat size={16} className={isRecurring ? "text-blue-500" : "text-gray-400"} />
@@ -307,6 +408,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                <div className="flex items-center gap-2">
                    {isRecurring && (
                        <select 
+                            aria-label="Период повтора"
                             value={frequency} 
                             onChange={e => setFrequency(e.target.value as any)}
                             className="bg-white border border-gray-200 text-xs rounded px-2 py-1 outline-none"
@@ -317,7 +419,10 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                        </select>
                    )}
                    <button 
+                        type="button"
                         onClick={() => setIsRecurring(!isRecurring)} 
+                        aria-label="Повторять задачу"
+                        aria-pressed={isRecurring}
                         className={`w-10 h-5 rounded-full relative transition-colors ${isRecurring ? 'bg-blue-500' : 'bg-gray-300'}`}
                     >
                        <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${isRecurring ? 'translate-x-5' : ''}`} />
@@ -339,6 +444,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                <div className="flex items-center justify-between gap-2 mb-1">
                    <label className="text-xs font-bold text-gray-400 uppercase block">Подзадачи</label>
                    <button
+                        type="button"
                         onClick={handleBreakdown}
                         disabled={!title.trim() || isBreakingDown}
                         className="h-8 px-2.5 rounded-lg bg-blue-50 text-blue-600 text-xs font-bold flex items-center gap-1 disabled:opacity-50"
@@ -351,11 +457,13 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                    {subtasks.map((st, idx) => (
                        <div key={st.id} className="flex items-center gap-2 group">
                            <button 
+                                type="button"
                                 onClick={() => {
                                     const newSt = [...subtasks];
                                     newSt[idx].isCompleted = !newSt[idx].isCompleted;
                                     setSubtasks(newSt);
                                 }}
+                                aria-label={st.isCompleted ? `Отметить подзадачу «${st.title}» невыполненной` : `Завершить подзадачу «${st.title}»`}
                                 className={st.isCompleted ? 'text-green-500' : 'text-gray-300'}
                             >
                                {st.isCompleted ? <CheckCircle2 size={18} /> : <Circle size={18} />}
@@ -369,7 +477,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
                                 }}
                                 className={`flex-1 bg-transparent outline-none text-sm ${st.isCompleted ? 'line-through text-gray-400' : ''}`} 
                            />
-                           <button onClick={() => setSubtasks(subtasks.filter((_, i) => i !== idx))} className="text-gray-300 opacity-0 group-hover:opacity-100 hover:text-red-400">
+                           <button type="button" aria-label={`Удалить подзадачу «${st.title}»`} onClick={() => setSubtasks(subtasks.filter((_, i) => i !== idx))} className="text-gray-300 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-red-400">
                                <XIcon size={14} />
                            </button>
                        </div>
@@ -392,11 +500,11 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, currentUser
       
       <div className="pt-4 flex gap-3">
           {task && (
-              <button onClick={() => onDelete(task.id)} className="p-3 rounded-xl bg-red-50 text-red-500">
+              <button type="button" aria-label="Удалить задачу" title="Удалить задачу" onClick={() => onDelete(task.id)} className="p-3 rounded-xl bg-red-50 text-red-500">
                   <Trash2 size={20} />
               </button>
           )}
-          <button onClick={handleSave} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform">
+          <button type="button" onClick={handleSave} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform">
               Сохранить
           </button>
       </div>
@@ -410,12 +518,14 @@ export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData 
     const [color, setColor] = useState(initialData?.color || 'bg-blue-500');
     const [goalId, setGoalId] = useState(initialData?.goalId || '');
     const [visibleTo, setVisibleTo] = useState<string[]>(initialData?.visibleTo || []);
+    const [isCompleted, setCompleted] = useState(initialData?.isCompleted || false);
 
     const colors = ['bg-blue-500', 'bg-red-500', 'bg-green-500', 'bg-yellow-500', 'bg-purple-500', 'bg-pink-500', 'bg-orange-500', 'bg-indigo-500', 'bg-teal-500'];
 
     return (
         <div className="space-y-4">
             <input 
+                aria-label="Название проекта"
                 value={title} 
                 onChange={e => setTitle(e.target.value)}
                 placeholder="Название проекта"
@@ -427,8 +537,11 @@ export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData 
                 <div className="flex flex-wrap gap-2">
                     {colors.map(c => (
                         <button 
+                            type="button"
                             key={c}
                             onClick={() => setColor(c)}
+                            aria-label={`Цвет проекта ${colors.indexOf(c) + 1}`}
+                            aria-pressed={color === c}
                             className={`w-8 h-8 rounded-full ${c} ${color === c ? 'ring-2 ring-offset-2 ring-gray-400' : ''}`}
                         />
                     ))}
@@ -440,8 +553,10 @@ export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData 
                 <div className="flex gap-2">
                     {Object.entries(PRIORITIES).map(([k, v]) => (
                         <button 
+                            type="button"
                             key={k}
                             onClick={() => setPriority(k as Priority)}
+                            aria-pressed={priority === k}
                             className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${priority === k ? v.color + ' border-transparent' : 'bg-white border-gray-200 text-gray-500'}`}
                         >
                             {v.label}
@@ -453,6 +568,7 @@ export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData 
             <div>
                 <label className="text-xs font-bold text-gray-400 uppercase mb-2 block">Финансовая цель</label>
                 <select 
+                    aria-label="Финансовая цель проекта"
                     value={goalId} 
                     onChange={e => setGoalId(e.target.value)}
                     className="w-full bg-gray-50 rounded-xl p-3 text-sm outline-none"
@@ -463,6 +579,19 @@ export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData 
             </div>
 
             <VisibilitySelector members={members} selectedIds={visibleTo} onChange={setVisibleTo} />
+
+            <label className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 p-3">
+                <span>
+                    <span className="block text-sm font-bold">Проект завершён</span>
+                    <span className="block text-xs text-gray-400">Задачи сохраняются и остаются доступны по фильтру</span>
+                </span>
+                <input
+                    type="checkbox"
+                    checked={isCompleted}
+                    onChange={event => setCompleted(event.target.checked)}
+                    className="h-5 w-5 accent-black"
+                />
+            </label>
 
             <div className="pt-2 space-y-2">
                 {initialData?.id && onDelete && (
@@ -483,7 +612,7 @@ export const EpicEditor = ({ onSave, onDelete, members, goals = [], initialData 
                         priority,
                         color,
                         goalId: goalId || undefined,
-                        isCompleted: initialData?.isCompleted || false,
+                        isCompleted,
                         createdById: initialData?.createdById,
                         visibleTo
                     })}
@@ -537,7 +666,7 @@ export const TasksScreen = ({
         .filter(t => t.status === status)
         .sort((left, right) => (left.sortOrder ?? left.createdAt) - (right.sortOrder ?? right.createdAt));
 
-    const beginDrag = (event: React.PointerEvent<HTMLDivElement>, id: string) => {
+    const beginDrag = (event: React.PointerEvent<HTMLButtonElement>, id: string) => {
         dragStart.current = { id, x: event.clientX, y: event.clientY, moved: false };
         try {
             event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -546,7 +675,7 @@ export const TasksScreen = ({
         }
     };
 
-    const updateDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const updateDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
         if (!dragStart.current) return;
         const distance = Math.hypot(event.clientX - dragStart.current.x, event.clientY - dragStart.current.y);
         if (distance > 8) {
@@ -555,7 +684,7 @@ export const TasksScreen = ({
         }
     };
 
-    const finishDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const finishDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
         const state = dragStart.current;
         dragStart.current = null;
         setDraggingId(null);
@@ -580,7 +709,7 @@ export const TasksScreen = ({
         onMoveTask(state.id, targetStatus, beforeTaskId && beforeTaskId !== state.id ? beforeTaskId : undefined);
     };
 
-    const cancelDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const cancelDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
         dragStart.current = null;
         setDraggingId(null);
         try {
@@ -603,8 +732,8 @@ export const TasksScreen = ({
                             value={view}
                             onChange={setView}
                             options={[
-                                { value: 'LIST', icon: ListIcon },
-                                { value: 'KANBAN', icon: Kanban }
+                                { value: 'LIST', icon: ListIcon, ariaLabel: 'Список задач' },
+                                { value: 'KANBAN', icon: Kanban, ariaLabel: 'Канбан' }
                             ]}
                         />
                     </div>
@@ -630,7 +759,7 @@ export const TasksScreen = ({
                                 key={epic.id}
                                 type="button"
                                 onClick={() => onEpicFilterChange(epic.id)}
-                                className={`h-9 max-w-[220px] shrink-0 rounded-full border pl-2.5 pr-2 text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform ${isActive ? 'bg-gray-950 text-white border-gray-950 shadow-sm' : 'bg-white text-gray-700 border-gray-200'}`}
+                                className={`h-9 max-w-[220px] shrink-0 rounded-full border pl-2.5 pr-2 text-xs font-bold flex items-center gap-2 active:scale-95 transition-transform ${epic.isCompleted ? 'opacity-60' : ''} ${isActive ? 'bg-gray-950 text-white border-gray-950 shadow-sm' : 'bg-white text-gray-700 border-gray-200'}`}
                                 aria-pressed={isActive}
                             >
                                 <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${epic.color}`} />
@@ -641,7 +770,7 @@ export const TasksScreen = ({
                             </button>
                         );
                     })}
-                    {activeEpic && (
+                    {activeEpic && (data.currentUser.role === 'OWNER' || data.currentUser.role === 'ADMIN') && (
                         <button
                             type="button"
                             onClick={() => onEditEpic(activeEpic)}
@@ -653,16 +782,18 @@ export const TasksScreen = ({
                             <span className="text-xs font-bold">Править</span>
                         </button>
                     )}
-                    <button
-                        type="button"
-                        onClick={onAddEpic}
-                        className="h-9 shrink-0 rounded-full bg-blue-50 text-blue-600 border border-blue-100 px-3 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
-                        aria-label="Создать проект"
-                        title="Создать проект"
-                    >
-                        <Plus size={15} />
-                        <span className="text-xs font-bold">Проект</span>
-                    </button>
+                    {(data.currentUser.role === 'OWNER' || data.currentUser.role === 'ADMIN') && (
+                        <button
+                            type="button"
+                            onClick={onAddEpic}
+                            className="h-9 shrink-0 rounded-full bg-blue-50 text-blue-600 border border-blue-100 px-3 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                            aria-label="Создать проект"
+                            title="Создать проект"
+                        >
+                            <Plus size={15} />
+                            <span className="text-xs font-bold">Проект</span>
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -693,6 +824,8 @@ export const TasksScreen = ({
                             <div
                                 key={status}
                                 data-kanban-column={status}
+                                role="list"
+                                aria-label={status === 'TODO' ? 'Надо сделать' : status === 'IN_PROGRESS' ? 'В процессе' : 'Готово'}
                                 className="min-w-[calc((100vw-36px)/2)] max-w-[calc((100vw-36px)/2)] sm:min-w-[220px] sm:max-w-[240px] shrink-0 bg-gray-50 rounded-[14px] border border-gray-100 p-2 snap-start"
                             >
                                 <div className="flex items-center gap-1.5 mb-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider truncate">
@@ -711,6 +844,7 @@ export const TasksScreen = ({
                                             onPointerMove={updateDrag}
                                             onPointerUp={finishDrag}
                                             onPointerCancel={cancelDrag}
+                                            onStatusMove={(nextStatus) => onMoveTask(task.id, nextStatus)}
                                             onClick={() => {
                                                 if (!suppressClick.current) onTaskClick(task);
                                             }}

@@ -1,19 +1,48 @@
 
 import { useState } from 'react';
-import { AppData, ToastMessage, TaskStatus } from './types';
-import { Task, Epic, getNextRecurringDate } from './tasks.model';
-import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, GoalContribution, Subscription } from './finance.model';
-import { User, Reward, RewardLog, calculateLevel, InventoryItem, calculateStreakBonus } from './family.model';
-import { ShoppingItem, ShoppingCategoryType } from './shopping.model';
-import { AppEvent, EventType } from './events.model';
+import { AppData, FamilySettings, ToastMessage, TaskStatus } from './types';
+import { Task, Epic } from './tasks.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, Subscription } from './finance.model';
+import { User, Reward, InventoryItem, calculateStreakBonus } from './family.model';
+import { ShoppingCategoryType } from './shopping.model';
 import { Note } from './notes.model';
-import { TWA, generateId, formatMoney } from './utils';
+import { TWA, generateId } from './utils';
 import { useFamilyData, useMutations } from './queries';
-import { INITIAL_DATA } from './data';
+
+const EMPTY_DATA: AppData = {
+  currentUser: {
+    id: '',
+    name: '',
+    role: 'CHILD',
+    avatar: '🙂',
+    xp: 0,
+    level: 1,
+    streak: 0
+  },
+  members: [],
+  epics: [],
+  tasks: [],
+  accounts: [],
+  goals: [],
+  savingsGoals: [],
+  contributions: [],
+  subscriptions: [],
+  budgets: [],
+  transactions: [],
+  rewards: [],
+  rewardLogs: [],
+  inventory: [],
+  shoppingList: [],
+  notes: [],
+  events: []
+};
 
 export const useAppStore = () => {
   // React Query Data
-  const { data, isLoading, isError } = useFamilyData();
+  const familyQuery = useFamilyData();
+  const data = familyQuery.data ?? EMPTY_DATA;
+  const isLoading = !familyQuery.data && familyQuery.isPending;
+  const isError = !familyQuery.data && familyQuery.isError;
   const mutations = useMutations();
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -22,7 +51,7 @@ export const useAppStore = () => {
   // --- Utils ---
   const addToast = (msg: string, type: 'SUCCESS' | 'INFO' | 'ERROR' = 'SUCCESS') => {
       const id = Math.random().toString();
-      setToasts(prev => [...prev, { id, message: msg, type }]);
+      setToasts([{ id, message: msg, type }]);
       if (type === 'SUCCESS') TWA.notification('success');
       if (type === 'ERROR') TWA.notification('error');
       setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
@@ -34,78 +63,23 @@ export const useAppStore = () => {
 
   const closeBonusModal = () => setBonusData(null);
 
-  // Helper to create Event
-  const createEvent = (type: EventType, payload: any): AppEvent => ({
-      id: generateId(),
-      type,
-      actorId: data.currentUser?.id || 'unknown',
-      payload,
-      timestamp: Date.now()
-  });
-
   // --- Actions Wrappers ---
 
   const checkDailyStreak = () => {
       if (!data || !data.currentUser) return;
-      
       const user = data.currentUser;
       const today = new Date().toISOString().split('T')[0];
-      
-      // Already logged in today
       if (user.lastLoginDate === today) return;
-
-      // Calculate date diff
       const lastDate = user.lastLoginDate ? new Date(user.lastLoginDate) : new Date(0);
       const nowDate = new Date(today);
       const diffTime = Math.abs(nowDate.getTime() - lastDate.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-
-      let newStreak = 1;
-      let bonusXp = 0;
-
-      if (diffDays === 1) {
-          // Consecutive day
-          newStreak = (user.streak || 0) + 1;
-          bonusXp = calculateStreakBonus(newStreak);
-      } else if (diffDays > 1) {
-          // Streak broken (or first login ever)
-          newStreak = 1;
-          bonusXp = 10; // Day 1 bonus
-      } else {
-          return;
-      }
-
-      // Update User
-      const newXp = user.xp + bonusXp;
-      const updatedUser: User = {
-          ...user,
-          streak: newStreak,
-          lastLoginDate: today,
-          xp: newXp,
-          level: calculateLevel(newXp)
-      };
-
-      // Log it
-      const newLog: RewardLog = {
-          id: generateId(),
-          userId: user.id,
-          action: 'EARNED',
-          amount: bonusXp,
-          description: `Ежедневный бонус (День ${newStreak}) 🔥`,
-          timestamp: Date.now()
-      };
-
-      const newMembers = data.members.map(m => m.id === user.id ? updatedUser : m);
-      const newLogs = [newLog, ...data.rewardLogs];
-
-      mutations.batchUpdate.mutate({
-          currentUser: updatedUser,
-          members: newMembers,
-          rewardLogs: newLogs
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const newStreak = diffDays === 1 ? (user.streak || 0) + 1 : 1;
+      const bonusXp = calculateStreakBonus(newStreak);
+      mutations.checkIn.mutate(undefined, {
+          onSuccess: () => setBonusData({ streak: newStreak, xp: bonusXp }),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось начислить ежедневный бонус', 'ERROR')
       });
-
-      setBonusData({ streak: newStreak, xp: bonusXp });
-      TWA.notification('success');
   };
 
   const switchUser = (userId: string) => {
@@ -116,123 +90,45 @@ export const useAppStore = () => {
       }
   };
 
-  const resetData = () => {
-      if (confirm('Вы уверены? Все данные будут удалены.')) {
-          mutations.batchUpdate.mutate(INITIAL_DATA, {
-              onSuccess: () => window.location.reload()
-          });
-      }
-  };
-
   const saveTask = (task: Task) => {
-      mutations.saveTask.mutate(task);
+      mutations.saveTask.mutate(task, {
+          onSuccess: () => addToast('Задача сохранена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить задачу', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
   const deleteTask = (id: string) => {
-      mutations.deleteTask.mutate(id);
+      mutations.deleteTask.mutate(id, {
+          onSuccess: () => addToast('Задача удалена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось удалить задачу', 'ERROR')
+      });
       TWA.haptic('medium');
   };
 
   const toggleTaskStatus = (id: string, status: TaskStatus) => {
       const task = data.tasks.find(t => t.id === id);
       if (!task) return;
-
       const isCompleting = status === 'DONE' && task.status !== 'DONE';
-      
-      let updates: Partial<AppData> = {};
-      let newTasks = [...data.tasks];
-      let newMembers = [...data.members];
-      let newLogs = [...data.rewardLogs];
-      let newEvents = [...(data.events || [])];
-
-      // 1. Update Status
-      const updatedTask = { ...task, status };
-      newTasks = newTasks.map(t => t.id === id ? updatedTask : t);
-      updates.tasks = newTasks;
-
-      // 2. Handle XP & Event
-      if (isCompleting) {
-          newMembers = newMembers.map(u => {
-              if (u.id === task.assigneeId) {
-                  const newXp = u.xp + task.points;
-                  const newLevel = calculateLevel(newXp);
-                  
-                  if (newLevel > u.level) {
-                      newEvents.unshift(createEvent('LEVEL_UP', { level: newLevel, userId: u.id }));
-                  }
-                  return { ...u, xp: newXp, level: newLevel };
-              }
-              return u;
-          });
-          updates.members = newMembers;
-          
-          if (data.currentUser.id === task.assigneeId) {
-              updates.currentUser = newMembers.find(m => m.id === data.currentUser.id);
-          }
-
-          newLogs.unshift({
-              id: generateId(),
-              userId: task.assigneeId || 'unknown',
-              action: 'EARNED',
-              amount: task.points,
-              description: `Выполнил: ${task.title}`,
-              timestamp: Date.now()
-          });
-          updates.rewardLogs = newLogs;
-
-          // Log Event
-          newEvents.unshift(createEvent('TASK_COMPLETED', { title: task.title, points: task.points }));
-          updates.events = newEvents;
-
-          // 3. Recurring Logic
-          if (task.isRecurring) {
-               const nextDate = getNextRecurringDate(task.dueDate, task.frequency);
-               const nextTask: Task = {
-                   ...task,
-                   id: generateId(),
-                   status: 'TODO',
-                   dueDate: nextDate,
-                   subtasks: task.subtasks.map(s => ({ ...s, isCompleted: false })),
-                   createdAt: Date.now()
-               };
-               newTasks.push(nextTask);
-               updates.tasks = newTasks;
-               
-               setTimeout(() => addToast(`Создана следующая задача на ${new Date(nextDate).toLocaleDateString('ru-RU')}`, 'INFO'), 500);
-          }
-      }
-
-      mutations.batchUpdate.mutate(updates);
-
-      if (isCompleting) {
-          addToast(`Задача выполнена! +${task.points} XP`, 'SUCCESS');
-      } else {
-          TWA.selection();
-      }
+      const willAwardXp = isCompleting && !task.rewardedAt;
+      mutations.setTaskStatus.mutate({ id, status }, {
+          onSuccess: () => addToast(
+              willAwardXp
+                ? `Задача выполнена · +${task.points} XP исполнителю`
+                : isCompleting ? 'Задача снова завершена · XP уже начислялись' : 'Статус задачи обновлён',
+              'SUCCESS'
+          ),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось изменить статус', 'ERROR')
+      });
+      TWA.selection();
   };
 
   const moveTask = (id: string, status: TaskStatus, beforeTaskId?: string) => {
       const task = data.tasks.find(t => t.id === id);
       if (!task) return;
 
-      const targetColumn = data.tasks
-          .filter(item => item.id !== id && item.status === status)
-          .sort((left, right) => (left.sortOrder ?? left.createdAt) - (right.sortOrder ?? right.createdAt));
-      const insertIndex = beforeTaskId
-          ? Math.max(0, targetColumn.findIndex(item => item.id === beforeTaskId))
-          : targetColumn.length;
-      const nextColumn = [...targetColumn];
-      nextColumn.splice(insertIndex < 0 ? targetColumn.length : insertIndex, 0, { ...task, status });
-
-      const updates = nextColumn.map((item, index) => ({
-          id: item.id,
-          status,
-          sortOrder: (index + 1) * 1000
-      }));
-
-      mutations.reorderTasks.mutate(updates, {
-          onSuccess: () => addToast('Порядок задач сохранён', 'SUCCESS'),
+      mutations.setTaskStatus.mutate({ id, status, beforeTaskId }, {
+          onSuccess: () => addToast(status === 'DONE' ? 'Задача завершена' : 'Положение задачи сохранено', 'SUCCESS'),
           onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось переместить задачу', 'ERROR')
       });
       TWA.selection();
@@ -251,58 +147,26 @@ export const useAppStore = () => {
           ...(originalTx ? { createdById: originalTx.createdById, date: originalTx.date } : {})
       };
 
-      let accs = [...data.accounts];
-      let goals = [...data.goals];
-
-      if (originalTx) {
-          accs = accs.map(a => {
-              if (a.id === originalTx.accountId) {
-                  const diff = originalTx.type === 'INCOME' ? -originalTx.amount : originalTx.amount;
-                  return { ...a, balance: a.balance + diff };
-              }
-              return a;
-          });
-          goals = goals.map(g => {
-               if (g.accountId === originalTx.accountId && originalTx.type === 'INCOME') {
-                   return { ...g, currentAmount: g.currentAmount - originalTx.amount };
-               }
-               return g;
-          });
-      }
-
-      accs = accs.map(a => {
-          if (a.id === newTx.accountId) {
-              const diff = newTx.type === 'INCOME' ? newTx.amount : -newTx.amount;
-              return { ...a, balance: a.balance + diff };
-          }
-          return a;
-      });
-      goals = goals.map(g => {
-          if (g.accountId === newTx.accountId && newTx.type === 'INCOME') {
-              return { ...g, currentAmount: g.currentAmount + newTx.amount };
-          }
-          return g;
-      });
-      
-      const newTransactions = isUpdate 
-        ? data.transactions.map(t => t.id === newTx.id ? newTx : t)
-        : [newTx, ...data.transactions];
-
-      mutations.batchUpdate.mutate({
-          transactions: newTransactions,
-          accounts: accs,
-          goals: goals
+      mutations.saveTransaction.mutate(newTx, {
+          onSuccess: () => addToast('Операция сохранена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить операцию', 'ERROR')
       });
       TWA.haptic('medium');
   };
 
   const saveAccount = (acc: Account, goal?: FinancialGoal) => {
-      mutations.saveAccount.mutate({ acc, goal });
+      mutations.saveAccount.mutate({ acc, goal }, {
+          onSuccess: () => addToast('Счёт сохранён', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить счёт', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
   const saveBudgets = (budgets: BudgetPlan[]) => {
-      mutations.saveBudgets.mutate(budgets);
+      mutations.saveBudgets.mutate(budgets, {
+          onSuccess: () => addToast('Бюджеты сохранены', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить бюджеты', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
@@ -310,12 +174,18 @@ export const useAppStore = () => {
       mutations.saveEpic.mutate({
           ...epic,
           createdById: epic.createdById || data.currentUser.id
+      }, {
+          onSuccess: () => addToast('Проект сохранён', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить проект', 'ERROR')
       });
       TWA.haptic('light');
   };
 
   const deleteEpic = (id: string) => {
-      mutations.deleteEpic.mutate(id);
+      mutations.deleteEpic.mutate(id, {
+          onSuccess: () => addToast('Проект удалён', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось удалить проект', 'ERROR')
+      });
       TWA.haptic('medium');
   };
 
@@ -372,294 +242,157 @@ export const useAppStore = () => {
           return;
       }
 
-      const newXp = data.currentUser.xp - reward.cost;
-      const updatedUser = { ...data.currentUser, xp: newXp, level: calculateLevel(newXp) };
-      
-      const newLog: RewardLog = {
-          id: generateId(),
-          userId: updatedUser.id,
-          action: 'SPENT',
-          amount: reward.cost,
-          description: `Купил: ${reward.title}`,
-          timestamp: Date.now()
-      };
-
-      const newItem: InventoryItem = {
-          id: generateId(),
-          rewardId: reward.id,
-          ownerId: updatedUser.id,
-          status: 'AVAILABLE',
-          purchasedAt: Date.now()
-      };
-
-      const newMembers = data.members.map(m => m.id === updatedUser.id ? updatedUser : m);
-      const newLogs = [newLog, ...data.rewardLogs];
-      const newInventory = [newItem, ...(data.inventory || [])];
-      
-      // Event
-      const newEvents = [createEvent('REWARD_BOUGHT', { title: reward.title }), ...(data.events || [])];
-
-      mutations.batchUpdate.mutate({
-          currentUser: updatedUser,
-          members: newMembers,
-          rewardLogs: newLogs,
-          inventory: newInventory,
-          events: newEvents
+      mutations.purchaseReward.mutate(reward.id, {
+          onSuccess: () => addToast('Куплено! Предмет уже в рюкзаке.', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось купить награду', 'ERROR')
       });
-
-      addToast(`Куплено! Предмет в рюкзаке.`, 'SUCCESS');
   };
 
   const consumeItem = (item: InventoryItem, rewardTitle: string) => {
       if (item.status !== 'AVAILABLE') return;
 
-      const updatedItem: InventoryItem = { ...item, status: 'USED', usedAt: Date.now() };
-      
-      const newLog: RewardLog = {
-          id: generateId(),
-          userId: data.currentUser.id,
-          action: 'USED',
-          amount: 0,
-          description: `Активировал: ${rewardTitle}`,
-          timestamp: Date.now()
-      };
-
-      const newInventory = data.inventory.map(i => i.id === item.id ? updatedItem : i);
-      const newLogs = [newLog, ...data.rewardLogs];
-
-      mutations.batchUpdate.mutate({
-          inventory: newInventory,
-          rewardLogs: newLogs
+      mutations.useReward.mutate(item.id, {
+          onSuccess: () => addToast(`Награда «${rewardTitle}» активирована`, 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось использовать награду', 'ERROR')
       });
+  };
 
-      addToast('Награда активирована! Наслаждайся.', 'SUCCESS');
+  const saveFamilySettings = (settings: FamilySettings) => {
+      mutations.saveFamilySettings.mutate(settings, {
+          onSuccess: () => addToast('Настройки семьи сохранены', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить настройки', 'ERROR')
+      });
+  };
+
+  const saveReward = (reward: Reward) => {
+      mutations.saveReward.mutate(reward, {
+          onSuccess: () => addToast('Награда сохранена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить награду', 'ERROR')
+      });
+  };
+
+  const archiveReward = (id: string) => {
+      mutations.archiveReward.mutate(id, {
+          onSuccess: () => addToast('Награда убрана из магазина', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось архивировать награду', 'ERROR')
+      });
   };
 
   const saveSavingsGoal = (goal: SavingsGoal) => {
-      const isUpdate = !!data.savingsGoals.find(g => g.id === goal.id);
-      let newGoals = [...data.savingsGoals];
-      if (isUpdate) {
-          newGoals = newGoals.map(g => g.id === goal.id ? goal : g);
-      } else {
-          newGoals.push(goal);
-      }
-      mutations.batchUpdate.mutate({ savingsGoals: newGoals });
+      mutations.saveSavingsGoal.mutate(goal, {
+          onSuccess: () => addToast('Копилка сохранена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить копилку', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
   const contributeToGoal = (goalId: string, amount: number, sourceAccountId: string, message?: string) => {
-      const goal = data.savingsGoals.find(g => g.id === goalId);
-      const account = data.accounts.find(a => a.id === sourceAccountId);
-      
       if (amount <= 0) {
            addToast('Сумма должна быть больше нуля', 'ERROR');
            return;
       }
 
-      if (!goal || !account) return;
-
-      if (account.balance < amount) {
-          addToast('Недостаточно средств на счете', 'ERROR');
-          return;
-      }
-
-      const updatedAccount = { ...account, balance: account.balance - amount };
-      const newAccounts = data.accounts.map(a => a.id === account.id ? updatedAccount : a);
-
-      const updatedGoal = { ...goal, currentAmount: goal.currentAmount + amount };
-      const newGoals = data.savingsGoals.map(g => g.id === goal.id ? updatedGoal : g);
-
-      const contribution: GoalContribution = {
-          id: generateId(),
-          goalId,
-          userId: data.currentUser.id,
-          amount,
-          message,
-          date: Date.now()
-      };
-      const newContributions = [contribution, ...data.contributions];
-
-      const transaction: Transaction = {
-          id: generateId(),
-          amount,
-          type: 'EXPENSE',
-          categoryId: 'goal_contrib',
-          accountId: sourceAccountId,
-          title: `В копилку: ${goal.title}`,
-          date: new Date().toISOString(),
-          createdById: data.currentUser.id
-      };
-      const newTransactions = [transaction, ...data.transactions];
-
-      // Event
-      const newEvents = [createEvent('GOAL_CONTRIBUTION', { goalTitle: goal.title, amountStr: formatMoney(amount) }), ...(data.events || [])];
-
-      mutations.batchUpdate.mutate({
-          accounts: newAccounts,
-          savingsGoals: newGoals,
-          contributions: newContributions,
-          transactions: newTransactions,
-          events: newEvents
+      mutations.contributeToSavingsGoal.mutate({ goalId, amount, sourceAccountId, message }, {
+          onSuccess: () => addToast('Отложено в копилку! 💰', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось пополнить копилку', 'ERROR')
       });
-
-      addToast(`Отложено в копилку! 💰`, 'SUCCESS');
-      TWA.notification('success');
   };
 
   // --- Subscriptions Actions ---
 
   const saveSubscription = (sub: Subscription) => {
-      const isUpdate = data.subscriptions.some(s => s.id === sub.id);
-      const newSubs = isUpdate 
-        ? data.subscriptions.map(s => s.id === sub.id ? sub : s)
-        : [...data.subscriptions, sub];
-      
-      mutations.batchUpdate.mutate({ subscriptions: newSubs });
+      mutations.saveSubscription.mutate(sub, {
+          onSuccess: () => addToast('Подписка сохранена', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить подписку', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
   const deleteSubscription = (id: string) => {
       if (confirm('Удалить подписку?')) {
-          const newSubs = data.subscriptions.filter(s => s.id !== id);
-          mutations.batchUpdate.mutate({ subscriptions: newSubs });
+          mutations.deleteSubscription.mutate(id, {
+              onSuccess: () => addToast('Подписка удалена', 'SUCCESS'),
+              onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось удалить подписку', 'ERROR')
+          });
           TWA.haptic('medium');
       }
   };
 
   const paySubscription = (sub: Subscription) => {
-      const account = data.accounts.find(a => a.id === sub.accountId);
-      if (!account) {
-          addToast('Счет списания не найден', 'ERROR');
-          return;
-      }
-      
-      if (account.balance < sub.amount) {
-          addToast('Недостаточно средств на счете', 'ERROR');
-          return;
-      }
-
-      // 1. Create Tx
-      const transaction: Transaction = {
-          id: generateId(),
-          amount: sub.amount,
-          title: `Подписка: ${sub.title}`,
-          type: 'EXPENSE',
-          categoryId: sub.categoryId,
-          accountId: sub.accountId,
-          date: new Date().toISOString(),
-          createdById: data.currentUser.id
-      };
-
-      // 2. Update Account
-      const updatedAccount = { ...account, balance: account.balance - sub.amount };
-      const newAccounts = data.accounts.map(a => a.id === account.id ? updatedAccount : a);
-
-      // 3. Update Subscription Date
-      const nextDate = getNextRecurringDate(sub.nextPaymentDate, sub.frequency);
-      const updatedSub = { ...sub, nextPaymentDate: nextDate };
-      const newSubs = data.subscriptions.map(s => s.id === sub.id ? updatedSub : s);
-
-      // Event
-      const newEvents = [createEvent('SUBSCRIPTION_PAID', { title: sub.title }), ...(data.events || [])];
-
-      mutations.batchUpdate.mutate({
-          transactions: [transaction, ...data.transactions],
-          accounts: newAccounts,
-          subscriptions: newSubs,
-          events: newEvents
+      mutations.paySubscription.mutate(sub.id, {
+          onSuccess: () => addToast('Подписка оплачена!', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось оплатить подписку', 'ERROR')
       });
-
-      addToast('Подписка оплачена!', 'SUCCESS');
-      TWA.notification('success');
   };
 
   // --- Shopping List Actions ---
 
   const addShoppingItem = (title: string, category: ShoppingCategoryType = 'FOOD') => {
-      const newItem: ShoppingItem = {
-          id: generateId(),
-          title,
-          category,
-          addedById: data.currentUser.id,
-          isCompleted: false,
-          createdAt: Date.now()
-      };
-      const newList = [newItem, ...(data.shoppingList || [])];
-      mutations.batchUpdate.mutate({ shoppingList: newList });
+      mutations.addShoppingItem.mutate({ id: generateId(), title, category }, {
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось добавить покупку', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
   const toggleShoppingItem = (id: string) => {
-      const newList = (data.shoppingList || []).map(item => 
-          item.id === id ? { ...item, isCompleted: !item.isCompleted } : item
-      );
-      mutations.batchUpdate.mutate({ shoppingList: newList });
+      const item = data.shoppingList.find(candidate => candidate.id === id);
+      if (!item) return;
+      mutations.setShoppingItemCompleted.mutate({ id, completed: !item.isCompleted }, {
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось обновить покупку', 'ERROR')
+      });
       TWA.selection();
   };
 
   const deleteShoppingItem = (id: string) => {
-      const newList = (data.shoppingList || []).filter(item => item.id !== id);
-      mutations.batchUpdate.mutate({ shoppingList: newList });
+      mutations.deleteShoppingItem.mutate(id, {
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось удалить покупку', 'ERROR')
+      });
       TWA.haptic('light');
   };
 
   const checkoutShoppingList = (totalAmount: number, accountId: string) => {
       const completedItems = (data.shoppingList || []).filter(i => i.isCompleted);
-      const remainingItems = (data.shoppingList || []).filter(i => !i.isCompleted);
-
       if (completedItems.length === 0) return;
 
-      // 1. Create Transaction
-      const transaction: Transaction = {
-          id: generateId(),
-          amount: totalAmount,
-          type: 'EXPENSE',
-          categoryId: 'food', // Defaulting to food for simplicity, could be smart
-          accountId,
-          title: `Продукты (${completedItems.length} шт)`,
-          date: new Date().toISOString(),
-          createdById: data.currentUser.id
-      };
-
-      // 2. Deduct from Account
-      const account = data.accounts.find(a => a.id === accountId);
-      let newAccounts = [...data.accounts];
-      if (account) {
-          const updatedAccount = { ...account, balance: account.balance - totalAmount };
-          newAccounts = newAccounts.map(a => a.id === account.id ? updatedAccount : a);
-      }
-
-      // Event
-      const newEvents = [createEvent('SHOPPING_CHECKOUT', { count: completedItems.length, totalStr: formatMoney(totalAmount) }), ...(data.events || [])];
-
-      // 3. Update Transactions and List
-      mutations.batchUpdate.mutate({
-          shoppingList: remainingItems,
-          transactions: [transaction, ...data.transactions],
-          accounts: newAccounts,
-          events: newEvents
+      mutations.checkoutShopping.mutate({
+          itemIds: completedItems.map(item => item.id),
+          totalAmount,
+          accountId
+      }, {
+          onSuccess: () => addToast('Список покупок оплачен!', 'SUCCESS'),
+          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось оплатить покупки', 'ERROR')
       });
-
-      addToast('Список покупок оплачен!', 'SUCCESS');
-      TWA.notification('success');
   };
 
   return {
     data,
     isLoading,
     isError,
+    loadError: familyQuery.error,
+    retryLoad: familyQuery.refetch,
+    isReady: !!familyQuery.data,
     toasts,
     bonusData,
     closeBonusModal,
     addToast,
     removeToast,
     actions: {
-      app: { switchUser, resetData, checkDailyStreak },
+      app: { switchUser, checkDailyStreak },
       tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus, move: moveTask },
       finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal, saveSubscription, deleteSubscription, paySubscription },
       epics: { save: saveEpic, delete: deleteEpic },
       notes: { save: saveNote, delete: deleteNote },
-      family: { updateUser, saveUser: saveFamilyUser, archiveUser: archiveFamilyUser, restoreUser: restoreFamilyUser, buyReward, consumeItem },
+      family: {
+        updateUser,
+        saveUser: saveFamilyUser,
+        archiveUser: archiveFamilyUser,
+        restoreUser: restoreFamilyUser,
+        saveSettings: saveFamilySettings,
+        saveReward,
+        archiveReward,
+        buyReward,
+        consumeItem
+      },
       shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList }
     }
   };

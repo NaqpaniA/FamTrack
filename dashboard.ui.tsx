@@ -34,6 +34,7 @@ const getEpicColorClass = (color: string) => EPIC_COLOR_CLASSES[color] || EPIC_C
 export const DashboardScreen = ({ 
     data, 
     onTaskClick, 
+    onTaskStatusChange,
     onNavigate,
     onAddEpic,
     onOpenProfile,
@@ -42,6 +43,7 @@ export const DashboardScreen = ({
 }: { 
     data: AppData, 
     onTaskClick: (t: Task) => void,
+    onTaskStatusChange: (id: string, status: Task['status']) => void,
     onNavigate: (tab: Tab, epicId?: string) => void,
     onAddEpic: () => void,
     onOpenProfile: () => void,
@@ -52,6 +54,7 @@ export const DashboardScreen = ({
     const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser));
     const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser));
     const recentEvents = (data.events || []).slice(0, 5);
+    const canManageEpics = data.currentUser.role === 'OWNER' || data.currentUser.role === 'ADMIN';
 
     // Active Tasks: Not done AND (Overdue OR Today OR No Date)
     const activeTasksCount = visibleTasks.filter(t => {
@@ -93,7 +96,7 @@ export const DashboardScreen = ({
 
             {/* Summary Cards */}
             <div className="grid grid-cols-3 gap-2.5">
-                <div className="bg-blue-50 p-3 rounded-[14px] border border-blue-100/70 flex flex-col justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('FINANCE')}>
+                <button type="button" className="bg-blue-50 p-3 rounded-[14px] border border-blue-100/70 flex flex-col text-left justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('FINANCE')}>
                     <div className="p-1.5 bg-white w-min rounded-[10px] text-blue-600 shadow-sm">
                         <Wallet size={18} />
                     </div>
@@ -101,8 +104,8 @@ export const DashboardScreen = ({
                         <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mb-0.5">Баланс</div>
                         <div className="text-[13px] font-bold truncate">{formatMoney(totalBalance).replace(',00 ₽', '')}</div>
                     </div>
-                </div>
-                <div className="bg-orange-50 p-3 rounded-[14px] border border-orange-100/70 flex flex-col justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('TASKS')}>
+                </button>
+                <button type="button" className="bg-orange-50 p-3 rounded-[14px] border border-orange-100/70 flex flex-col text-left justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('TASKS')}>
                     <div className="p-1.5 bg-white w-min rounded-[10px] text-orange-600 shadow-sm">
                         <CheckSquare size={18} />
                     </div>
@@ -110,8 +113,8 @@ export const DashboardScreen = ({
                         <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mb-0.5">К Делу</div>
                         <div className="text-[13px] font-bold">{activeTasksCount} задач</div>
                     </div>
-                </div>
-                <div className="bg-yellow-50 p-3 rounded-[14px] border border-yellow-100/70 flex flex-col justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('FAMILY')}>
+                </button>
+                <button type="button" className="bg-yellow-50 p-3 rounded-[14px] border border-yellow-100/70 flex flex-col text-left justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('FAMILY')}>
                     <div className="p-1.5 bg-white w-min rounded-[10px] text-yellow-600 shadow-sm">
                         <Trophy size={18} />
                     </div>
@@ -119,7 +122,7 @@ export const DashboardScreen = ({
                         <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mb-0.5">Уровень {data.currentUser.level}</div>
                         <div className="text-[13px] font-bold">{data.currentUser.xp} XP</div>
                     </div>
-                </div>
+                </button>
             </div>
 
             <NotesWidget data={data} onOpenAll={onOpenNotes} onCreate={onAddNote} />
@@ -139,10 +142,11 @@ export const DashboardScreen = ({
                          const epicColorClass = getEpicColorClass(epic.color);
 
                          return (
-                             <div 
+                             <button
+                                type="button"
                                 key={epic.id} 
                                 onClick={() => onNavigate('TASKS', epic.id)}
-                                className={`min-w-[148px] h-28 p-3 rounded-[14px] text-white relative overflow-hidden shadow-md transform transition-transform active:scale-95 cursor-pointer snap-start ${epicColorClass}`}
+                                className={`min-w-[148px] h-28 p-3 rounded-[14px] text-left text-white relative overflow-hidden shadow-md transform transition-transform active:scale-95 cursor-pointer snap-start ${epicColorClass}`}
                              >
                                  <div className={`absolute inset-0 ${epicColorClass} opacity-90`} />
                                  <div className="absolute top-0 right-0 p-8 bg-white/10 rounded-full -mr-4 -mt-4 blur-xl"></div>
@@ -158,15 +162,19 @@ export const DashboardScreen = ({
                                          </div>
                                      </div>
                                  </div>
-                             </div>
+                             </button>
                          )
                     })}
-                    <button 
-                        onClick={onAddEpic}
-                        className="min-w-[48px] h-28 rounded-[14px] border-2 border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 shrink-0 active:bg-gray-50 transition-colors snap-start"
-                    >
-                        <Plus size={24} />
-                    </button>
+                    {canManageEpics && (
+                        <button
+                            type="button"
+                            onClick={onAddEpic}
+                            aria-label="Создать проект"
+                            className="min-w-[48px] h-28 rounded-[14px] border-2 border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 shrink-0 active:bg-gray-50 transition-colors snap-start"
+                        >
+                            <Plus size={24} />
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -189,6 +197,7 @@ export const DashboardScreen = ({
                                       assignee={data.members.find(m => m.id === task.assigneeId)}
                                       epic={data.epics.find(e => e.id === task.epicId)}
                                       onClick={onTaskClick}
+                                      onStatusChange={(status) => onTaskStatusChange(task.id, status)}
                                    />
                                </div>
                            ))

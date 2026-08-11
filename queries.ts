@@ -1,11 +1,12 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import { AppData, User } from './types';
+import { AppData, FamilySettings, User } from './types';
 import { Task, Epic } from './tasks.model';
-import { Transaction, Account, FinancialGoal, BudgetPlan } from './finance.model';
+import { Reward } from './family.model';
+import { Transaction, Account, FinancialGoal, BudgetPlan, SavingsGoal, Subscription } from './finance.model';
 import { Note } from './notes.model';
-import { INITIAL_DATA } from './data';
+import { ShoppingCategoryType } from './shopping.model';
 import { TWA } from './utils';
 
 // Keys
@@ -19,8 +20,11 @@ export const useFamilyData = () => {
     return useQuery({
         queryKey: KEYS.DATA,
         queryFn: () => api.loadData(),
-        initialData: INITIAL_DATA,
-        staleTime: 1000 * 60 * 5, // 5 minutes considered fresh
+        staleTime: 1000,
+        refetchInterval: 4000,
+        refetchIntervalInBackground: false,
+        refetchOnWindowFocus: 'always',
+        refetchOnReconnect: 'always',
     });
 };
 
@@ -33,13 +37,19 @@ export const useMutations = () => {
 
     // Helper to get current data from cache for optimistic updates
     const getData = (): AppData => {
-        return queryClient.getQueryData(KEYS.DATA) || INITIAL_DATA;
+        const data = queryClient.getQueryData<AppData>(KEYS.DATA);
+        if (!data) {
+            throw new Error('Данные семьи ещё не загружены');
+        }
+        return data;
     };
 
     // Helper to set data in cache
     const setData = (newData: AppData) => {
         queryClient.setQueryData(KEYS.DATA, newData);
     };
+
+    const syncServerData = (serverData: AppData) => setData(serverData);
 
     return {
         saveTask: useMutation({
@@ -61,6 +71,7 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
@@ -76,28 +87,38 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
-        reorderTasks: useMutation({
-            mutationFn: (tasks: Array<{ id: string; status: Task['status']; sortOrder: number }>) => api.reorderTasks(tasks),
-            onMutate: async (updates) => {
+        setTaskStatus: useMutation({
+            mutationFn: ({ id, status, beforeTaskId }: { id: string; status: Task['status']; beforeTaskId?: string }) => (
+                api.setTaskStatus(id, status, beforeTaskId)
+            ),
+            onMutate: async ({ id, status, beforeTaskId }) => {
                 await queryClient.cancelQueries({ queryKey: KEYS.DATA });
                 const prevData = getData();
-                const byId = new Map(updates.map(update => [update.id, update]));
+                const task = prevData.tasks.find(item => item.id === id);
+                if (!task) return { prevData };
+                const column = prevData.tasks
+                    .filter(item => item.id !== id && item.status === status)
+                    .sort((left, right) => (left.sortOrder ?? left.createdAt) - (right.sortOrder ?? right.createdAt));
+                const rawIndex = beforeTaskId ? column.findIndex(item => item.id === beforeTaskId) : column.length;
+                column.splice(rawIndex < 0 ? column.length : rawIndex, 0, { ...task, status });
+                const ordered = new Map(column.map((item, index) => [item.id, (index + 1) * 1000]));
                 setData({
                     ...prevData,
-                    tasks: prevData.tasks.map(task => {
-                        const update = byId.get(task.id);
-                        return update ? { ...task, status: update.status, sortOrder: update.sortOrder } : task;
-                    })
+                    tasks: prevData.tasks.map(item => ordered.has(item.id)
+                        ? { ...item, status, sortOrder: ordered.get(item.id) }
+                        : item)
                 });
                 return { prevData };
             },
-            onError: (err, updates, context) => {
+            onError: (error, input, context) => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
@@ -109,14 +130,13 @@ export const useMutations = () => {
                 // or replicating business logic here. 
                 // For now, we rely on 'onSettled' to sync correct balances from backend/api.
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
         saveAccount: useMutation({
-            mutationFn: async ({ acc, goal }: { acc: Account, goal?: FinancialGoal }) => {
-                await api.saveAccount(acc);
-                if (goal) await api.saveGoal(goal);
-            },
+            mutationFn: ({ acc, goal }: { acc: Account, goal?: FinancialGoal }) => api.saveAccount(acc, goal),
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
@@ -131,6 +151,7 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
         
@@ -150,6 +171,7 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
@@ -170,21 +192,73 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
         saveUser: useMutation({
             mutationFn: (user: User) => api.saveUser(user),
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
         archiveUser: useMutation({
             mutationFn: (id: string) => api.archiveUser(id),
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
         restoreUser: useMutation({
             mutationFn: (id: string) => api.restoreUser(id),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        checkIn: useMutation({
+            mutationFn: () => api.checkIn(),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveFamilySettings: useMutation({
+            mutationFn: (settings: FamilySettings) => api.saveFamilySettings(settings),
+            onMutate: async (settings) => {
+                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
+                const prevData = getData();
+                if (prevData.family) {
+                    setData({ ...prevData, family: { ...prevData.family, settings } });
+                }
+                return { prevData };
+            },
+            onError: (error, settings, context) => {
+                if (context?.prevData) setData(context.prevData);
+                TWA.notification('error');
+            },
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveReward: useMutation({
+            mutationFn: (reward: Reward) => api.saveReward(reward),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        archiveReward: useMutation({
+            mutationFn: (id: string) => api.archiveReward(id),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        purchaseReward: useMutation({
+            mutationFn: (id: string) => api.purchaseReward(id),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        useReward: useMutation({
+            mutationFn: (inventoryId: string) => api.useReward(inventoryId),
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
@@ -204,6 +278,7 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
@@ -219,23 +294,63 @@ export const useMutations = () => {
                 if (context?.prevData) setData(context.prevData);
                 TWA.notification('error');
             },
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         }),
 
-        // Special mutation for handling complex logic (Buying Reward, Completing Task)
-        // In a real backend, this would be a single API endpoint /rpc/complete_task
-        batchUpdate: useMutation({
-            mutationFn: (updates: Partial<AppData>) => api.batchUpdate(updates),
-            onMutate: async (updates) => {
-                await queryClient.cancelQueries({ queryKey: KEYS.DATA });
-                const prevData = getData();
-                setData({ ...prevData, ...updates });
-                return { prevData };
-            },
-            onError: (err, updates, context) => {
-                if (context?.prevData) setData(context.prevData);
-                TWA.notification('error');
-            },
+        saveSavingsGoal: useMutation({
+            mutationFn: (goal: SavingsGoal) => api.saveSavingsGoal(goal),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        contributeToSavingsGoal: useMutation({
+            mutationFn: (input: { goalId: string; amount: number; sourceAccountId: string; message?: string }) => (
+                api.contributeToSavingsGoal(input)
+            ),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        saveSubscription: useMutation({
+            mutationFn: (subscription: Subscription) => api.saveSubscription(subscription),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        deleteSubscription: useMutation({
+            mutationFn: (id: string) => api.deleteSubscription(id),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        paySubscription: useMutation({
+            mutationFn: (id: string) => api.paySubscription(id),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        addShoppingItem: useMutation({
+            mutationFn: (input: { id: string; title: string; category: ShoppingCategoryType }) => api.addShoppingItem(input),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        setShoppingItemCompleted: useMutation({
+            mutationFn: (input: { id: string; completed: boolean }) => api.setShoppingItemCompleted(input.id, input.completed),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        deleteShoppingItem: useMutation({
+            mutationFn: (id: string) => api.deleteShoppingItem(id),
+            onSuccess: syncServerData,
+            onSettled: () => invalidate()
+        }),
+
+        checkoutShopping: useMutation({
+            mutationFn: (input: { itemIds: string[]; totalAmount: number; accountId: string }) => api.checkoutShopping(input),
+            onSuccess: syncServerData,
             onSettled: () => invalidate()
         })
     };

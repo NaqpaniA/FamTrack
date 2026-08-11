@@ -19,13 +19,18 @@ import {
   RotateCcw,
   Save,
   ShieldCheck,
-  Link as LinkIcon
+  Link as LinkIcon,
+  BellRing,
+  Gift,
+  Plus,
+  Trash2
 } from 'lucide-react';
-import { AppData } from './types';
-import { User, Reward, InventoryItem, calculateLevel, getLevelProgress, getNextLevelXp } from './family.model';
+import { AppData, FamilySettings } from './types';
+import { User, Reward, InventoryItem, getLevelProgress, getNextLevelXp } from './family.model';
 import { Avatar, Modal, Screen, SectionHeader, SegmentedControl } from './ui-kit';
 import { generateId } from './utils';
 import { api } from './api';
+import { DEFAULT_FAMILY_SETTINGS } from './settings.model';
 
 // --- Components ---
 
@@ -150,6 +155,244 @@ const createBlankUser = (): User => ({
     streak: 0,
     isActive: true
 });
+
+const createBlankReward = (): Reward => ({
+    id: generateId(),
+    title: '',
+    cost: 100,
+    icon: '🎁',
+    description: '',
+    isActive: true
+});
+
+const RewardEditor = ({
+    reward,
+    onSave,
+    onClose
+}: {
+    reward: Reward,
+    onSave: (reward: Reward) => void,
+    onClose: () => void
+}) => {
+    const [title, setTitle] = useState(reward.title);
+    const [cost, setCost] = useState(String(reward.cost));
+    const [icon, setIcon] = useState(reward.icon);
+    const [description, setDescription] = useState(reward.description || '');
+
+    const submit = () => {
+        if (!title.trim()) return;
+        onSave({
+            ...reward,
+            title: title.trim(),
+            cost: Math.max(1, Math.round(Number(cost) || 1)),
+            icon: icon.trim() || '🎁',
+            description: description.trim() || undefined,
+            isActive: true
+        });
+        onClose();
+    };
+
+    return (
+        <div className="space-y-4 pb-4">
+            <div className="grid grid-cols-[72px_1fr] gap-3">
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Иконка</span>
+                    <input
+                        value={icon}
+                        onChange={event => setIcon(event.target.value)}
+                        maxLength={16}
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-center text-2xl bg-white"
+                    />
+                </label>
+                <label className="space-y-1">
+                    <span className="text-[11px] font-bold text-gray-400 uppercase">Название</span>
+                    <input
+                        value={title}
+                        onChange={event => setTitle(event.target.value)}
+                        maxLength={120}
+                        className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm font-bold bg-white"
+                    />
+                </label>
+            </div>
+            <label className="space-y-1 block">
+                <span className="text-[11px] font-bold text-gray-400 uppercase">Стоимость XP</span>
+                <input
+                    type="number"
+                    min="1"
+                    value={cost}
+                    onChange={event => setCost(event.target.value)}
+                    className="w-full h-11 rounded-xl border border-gray-200 px-3 text-sm bg-white"
+                />
+            </label>
+            <label className="space-y-1 block">
+                <span className="text-[11px] font-bold text-gray-400 uppercase">Описание</span>
+                <textarea
+                    value={description}
+                    onChange={event => setDescription(event.target.value)}
+                    maxLength={500}
+                    className="w-full min-h-24 rounded-xl border border-gray-200 p-3 text-sm bg-white"
+                />
+            </label>
+            <button
+                type="button"
+                onClick={submit}
+                disabled={!title.trim()}
+                className="w-full h-11 rounded-xl bg-black text-white text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-40"
+            >
+                <Save size={16} /> Сохранить награду
+            </button>
+        </div>
+    );
+};
+
+const FamilyManagementPanel = ({
+    data,
+    onSaveSettings,
+    onSaveReward,
+    onArchiveReward
+}: {
+    data: AppData,
+    onSaveSettings: (settings: FamilySettings) => void,
+    onSaveReward: (reward: Reward) => void,
+    onArchiveReward: (id: string) => void
+}) => {
+    const settings = data.family?.settings || DEFAULT_FAMILY_SETTINGS;
+    const [editingReward, setEditingReward] = useState<Reward | null>(null);
+    const activeRewards = data.rewards.filter(reward => reward.isActive !== false);
+    const archivedRewards = data.rewards.filter(reward => reward.isActive === false);
+
+    const archive = (reward: Reward) => {
+        if (confirm(`Убрать «${reward.title}» из магазина? Купленные предметы сохранятся.`)) {
+            onArchiveReward(reward.id);
+        }
+    };
+
+    const restore = (reward: Reward) => {
+        onSaveReward({ ...reward, isActive: true });
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+            <section className="space-y-3">
+                <SectionHeader title="Правила семьи" icon={BellRing} />
+                <div className="rounded-[14px] border border-gray-100 bg-white p-4 shadow-sm space-y-4">
+                    <label className="flex items-center justify-between gap-4">
+                        <span>
+                            <span className="block text-sm font-bold">Родитель выполняет за ребёнка</span>
+                            <span className="block text-xs text-gray-400 mt-0.5">XP начисляется ребёнку, исполнитель записывается отдельно</span>
+                        </span>
+                        <input
+                            type="checkbox"
+                            checked={settings.allowParentTaskCompletion}
+                            onChange={event => onSaveSettings({ ...settings, allowParentTaskCompletion: event.target.checked })}
+                            className="h-5 w-5 accent-black shrink-0"
+                        />
+                    </label>
+                    <label className="space-y-1 block">
+                        <span className="text-[11px] font-bold text-gray-400 uppercase">Уведомления задач по умолчанию</span>
+                        <select
+                            value={settings.taskNotificationMode}
+                            onChange={event => onSaveSettings({
+                                ...settings,
+                                taskNotificationMode: event.target.value as FamilySettings['taskNotificationMode']
+                            })}
+                            className="w-full h-11 rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm font-bold"
+                        >
+                            <option value="PRIVATE">Только личные</option>
+                            <option value="GROUP">Только семейная группа</option>
+                            <option value="BOTH">Личные и группа</option>
+                            <option value="OFF">Выключены</option>
+                        </select>
+                    </label>
+                    <label className="space-y-1 block">
+                        <span className="text-[11px] font-bold text-gray-400 uppercase">Часовой пояс IANA</span>
+                        <input
+                            key={settings.timezone}
+                            defaultValue={settings.timezone}
+                            onBlur={event => {
+                                const timezone = event.target.value.trim();
+                                if (timezone && timezone !== settings.timezone) {
+                                    onSaveSettings({ ...settings, timezone });
+                                }
+                            }}
+                            placeholder="Europe/Moscow"
+                            className="w-full h-11 rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm"
+                        />
+                    </label>
+                </div>
+            </section>
+
+            <section className="space-y-3">
+                <SectionHeader
+                    title="Каталог подарков"
+                    icon={Gift}
+                    action={(
+                        <button
+                            type="button"
+                            onClick={() => setEditingReward(createBlankReward())}
+                            className="h-9 rounded-xl bg-black px-3 text-xs font-bold text-white flex items-center gap-1.5"
+                        >
+                            <Plus size={15} /> Добавить
+                        </button>
+                    )}
+                />
+                <div className="space-y-2">
+                    {activeRewards.map(reward => (
+                        <div key={reward.id} className="rounded-[14px] border border-gray-100 bg-white p-3 shadow-sm flex items-center gap-3">
+                            <span className="text-3xl" aria-hidden="true">{reward.icon}</span>
+                            <button type="button" onClick={() => setEditingReward(reward)} className="min-w-0 flex-1 text-left">
+                                <span className="block text-sm font-bold truncate">{reward.title}</span>
+                                <span className="block text-xs text-gray-400">{reward.cost} XP</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => archive(reward)}
+                                className="h-9 w-9 rounded-xl bg-red-50 text-red-600 flex items-center justify-center"
+                                aria-label={`Убрать ${reward.title} из магазина`}
+                            >
+                                <Trash2 size={16} />
+                            </button>
+                        </div>
+                    ))}
+                    {activeRewards.length === 0 ? (
+                        <p className="rounded-[14px] border border-dashed border-gray-200 p-5 text-center text-sm text-gray-400">Каталог пуст</p>
+                    ) : null}
+                </div>
+                {archivedRewards.length > 0 ? (
+                    <details className="rounded-[14px] border border-gray-100 bg-gray-50 p-3">
+                        <summary className="cursor-pointer text-xs font-bold text-gray-500">
+                            Архив: {archivedRewards.length}
+                        </summary>
+                        <div className="mt-3 space-y-2">
+                            {archivedRewards.map(reward => (
+                                <div key={reward.id} className="flex items-center gap-3 rounded-xl bg-white p-3 opacity-80">
+                                    <span className="text-2xl" aria-hidden="true">{reward.icon}</span>
+                                    <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-sm font-bold">{reward.title}</span>
+                                        <span className="block text-xs text-gray-400">{reward.cost} XP · не показывается в магазине</span>
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => restore(reward)}
+                                        className="h-9 rounded-xl border border-gray-200 bg-white px-3 text-xs font-bold text-gray-700"
+                                    >
+                                        Вернуть
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                ) : null}
+            </section>
+
+            <Modal isOpen={!!editingReward} onClose={() => setEditingReward(null)} title="Награда">
+                {editingReward ? (
+                    <RewardEditor reward={editingReward} onSave={onSaveReward} onClose={() => setEditingReward(null)} />
+                ) : null}
+            </Modal>
+        </div>
+    );
+};
 
 const FamilyMemberEditor = ({
     user,
@@ -452,6 +695,9 @@ export const FamilyScreen = ({
     onSaveUser,
     onArchiveUser,
     onRestoreUser,
+    onSaveSettings,
+    onSaveReward,
+    onArchiveReward,
     onBuyReward,
     onConsumeItem
 }: { 
@@ -459,12 +705,16 @@ export const FamilyScreen = ({
     onSaveUser: (u: User) => void,
     onArchiveUser: (id: string) => void,
     onRestoreUser: (id: string) => void,
+    onSaveSettings: (settings: FamilySettings) => void,
+    onSaveReward: (reward: Reward) => void,
+    onArchiveReward: (id: string) => void,
     onBuyReward: (reward: Reward) => void,
     onConsumeItem?: (item: InventoryItem, rewardTitle: string) => void
 }) => {
-    const [activeTab, setActiveTab] = useState<'MEMBERS' | 'SHOP' | 'INVENTORY' | 'ADMIN'>('MEMBERS');
+    const [activeTab, setActiveTab] = useState<'MEMBERS' | 'SHOP' | 'INVENTORY' | 'MANAGE' | 'ADMIN'>('MEMBERS');
     const [isHistoryOpen, setHistoryOpen] = useState(false);
     const isOwner = data.currentUser.role === 'OWNER';
+    const isParent = isOwner || data.currentUser.role === 'ADMIN';
 
     const history = [...data.rewardLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 20);
     
@@ -488,11 +738,13 @@ export const FamilyScreen = ({
                  <SegmentedControl
                     value={activeTab}
                     onChange={setActiveTab}
+                    className="max-w-full overflow-x-auto no-scrollbar"
                     options={[
                         { value: 'MEMBERS', label: 'Участники' },
                         { value: 'INVENTORY', label: 'Рюкзак', icon: Backpack },
                         { value: 'SHOP', label: 'Магазин', icon: ShoppingBag },
-                        ...(isOwner ? [{ value: 'ADMIN' as const, label: 'Состав', icon: ShieldCheck }] : [])
+                        ...(isParent ? [{ value: 'MANAGE' as const, label: 'Управление', icon: ShieldCheck }] : []),
+                        ...(isOwner ? [{ value: 'ADMIN' as const, label: 'Состав', icon: UserPlus }] : [])
                     ]}
                  />
             </div>
@@ -589,7 +841,7 @@ export const FamilyScreen = ({
                                  {data.currentUser.xp}
                              </div>
                          </div>
-                         <button onClick={() => setHistoryOpen(true)} className="bg-white/20 p-2 rounded-xl hover:bg-white/30 transition-colors">
+                         <button type="button" onClick={() => setHistoryOpen(true)} aria-label="Открыть историю наград" className="bg-white/20 p-2 rounded-xl hover:bg-white/30 transition-colors">
                              <History size={20} />
                          </button>
                      </div>
@@ -599,7 +851,7 @@ export const FamilyScreen = ({
                          <SectionHeader title="Награды" />
                          <div className="h-3" />
                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                             {data.rewards.map(reward => (
+                             {data.rewards.filter(reward => reward.isActive !== false).map(reward => (
                                  <RewardCard 
                                     key={reward.id}
                                     reward={reward}
@@ -618,6 +870,15 @@ export const FamilyScreen = ({
                     onSaveUser={onSaveUser}
                     onArchiveUser={onArchiveUser}
                     onRestoreUser={onRestoreUser}
+                />
+            )}
+
+            {activeTab === 'MANAGE' && isParent && (
+                <FamilyManagementPanel
+                    data={data}
+                    onSaveSettings={onSaveSettings}
+                    onSaveReward={onSaveReward}
+                    onArchiveReward={onArchiveReward}
                 />
             )}
 

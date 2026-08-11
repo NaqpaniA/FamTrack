@@ -1,44 +1,66 @@
 
-import { AppData } from './types';
-import { INITIAL_DATA } from './data';
 import type { User } from './family.model';
-
-export const DB_KEY = 'FAMILY_OS_V5_DATA';
 
 // --- Telegram Web App Utils ---
 
 // Safe access to Telegram Web App object
 const getTelegramWebApp = () => (window as any).Telegram?.WebApp;
-const tg = getTelegramWebApp();
 
 export const TWA = {
-  ready: () => tg?.ready(),
-  expand: () => tg?.expand(),
-  close: () => tg?.close(),
-  enableClosingConfirmation: () => tg?.enableClosingConfirmation(),
+  ready: () => getTelegramWebApp()?.ready?.(),
+  expand: () => getTelegramWebApp()?.expand?.(),
+  requestFullscreen: () => {
+      const webApp = getTelegramWebApp();
+      if (typeof webApp?.requestFullscreen !== 'function' || webApp.isFullscreen) return;
+      try {
+          webApp.requestFullscreen();
+      } catch {
+          // Older Telegram clients keep the expanded-height fallback.
+      }
+  },
+  setHeaderColor: (color: string) => {
+      try { getTelegramWebApp()?.setHeaderColor?.(color); } catch { /* unsupported client */ }
+  },
+  setBackgroundColor: (color: string) => {
+      try { getTelegramWebApp()?.setBackgroundColor?.(color); } catch { /* unsupported client */ }
+  },
+  setBottomBarColor: (color: string) => {
+      try { getTelegramWebApp()?.setBottomBarColor?.(color); } catch { /* unsupported client */ }
+  },
+  disableVerticalSwipes: () => {
+      try { getTelegramWebApp()?.disableVerticalSwipes?.(); } catch { /* unsupported client */ }
+  },
+  close: () => getTelegramWebApp()?.close?.(),
+  enableClosingConfirmation: () => getTelegramWebApp()?.enableClosingConfirmation?.(),
   // Haptic Feedback
   haptic: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => {
-      tg?.HapticFeedback.impactOccurred(style);
+      getTelegramWebApp()?.HapticFeedback?.impactOccurred?.(style);
   },
   notification: (type: 'error' | 'success' | 'warning') => {
-      tg?.HapticFeedback.notificationOccurred(type);
+      getTelegramWebApp()?.HapticFeedback?.notificationOccurred?.(type);
   },
   selection: () => {
-      tg?.HapticFeedback.selectionChanged();
+      getTelegramWebApp()?.HapticFeedback?.selectionChanged?.();
   },
   // Colors
-  backgroundColor: tg?.themeParams?.bg_color || '#f3f4f6',
-  textColor: tg?.themeParams?.text_color || '#1f2937',
-  buttonColor: tg?.themeParams?.button_color || '#000000',
-  buttonTextColor: tg?.themeParams?.button_text_color || '#ffffff',
+  get backgroundColor() { return getTelegramWebApp()?.themeParams?.bg_color || '#f3f4f6'; },
+  get textColor() { return getTelegramWebApp()?.themeParams?.text_color || '#1f2937'; },
+  get buttonColor() { return getTelegramWebApp()?.themeParams?.button_color || '#000000'; },
+  get buttonTextColor() { return getTelegramWebApp()?.themeParams?.button_text_color || '#ffffff'; },
   
   // User
-  user: tg?.initDataUnsafe?.user,
-  initData: tg?.initData,
+  get user() { return getTelegramWebApp()?.initDataUnsafe?.user; },
+  get initData() { return getTelegramWebApp()?.initData; },
 };
 
 export const getTelegramInitData = () => {
   return getTelegramWebApp()?.initData || '';
+};
+
+export const getTelegramStartParam = () => {
+  const startParam = getTelegramWebApp()?.initDataUnsafe?.start_param;
+  if (typeof startParam === 'string' && startParam) return startParam;
+  return new URLSearchParams(window.location.search).get('tgWebAppStartParam') || '';
 };
 
 // --- Helper Utils ---
@@ -76,44 +98,3 @@ export const isVisible = (item: any, userOrId: string | User) => {
     // 4. Strict Check: Only people in the list can see. 
     return item.visibleTo.includes(userId);
 };
-
-// --- Legacy Local DB (kept for Adapter fallback) ---
-
-export class LocalDatabase {
-  static load(): AppData {
-    try {
-      const stored = localStorage.getItem(DB_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        // Basic migration check
-        if (!parsed.accounts && (parsed as any).wallet) {
-            return INITIAL_DATA; // Reset if too old
-        }
-        // Migration for Inventory (if it doesn't exist)
-        if (!parsed.inventory) {
-            parsed.inventory = [];
-        }
-        if (!parsed.notes) {
-            parsed.notes = [];
-        }
-        return parsed;
-      }
-    } catch (e) {
-      console.error("Failed to load data", e);
-    }
-    return INITIAL_DATA;
-  }
-
-  static save(data: AppData) {
-    try {
-      localStorage.setItem(DB_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.error("Failed to save data", e);
-    }
-  }
-  
-  static reset() {
-      localStorage.removeItem(DB_KEY);
-      window.location.reload();
-  }
-}
