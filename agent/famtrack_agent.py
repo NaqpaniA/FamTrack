@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Telegram agent for FamTrack.
+"""Telegram family bot for FamTrack.
 
 The service is intentionally dependency-free. It runs on the home server,
 talks to Telegram with long polling, and uses the FamTrack HTTP API as the
@@ -13,10 +13,8 @@ import hmac
 import http.client
 import json
 import os
-import shutil
 import socket
 import ssl
-import subprocess
 import sys
 import time
 import traceback
@@ -25,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -38,13 +36,14 @@ FAMTRACK_PUBLIC_URL = os.environ.get("FAMTRACK_PUBLIC_URL", "").strip()
 FAMTRACK_TELEGRAM_BOT_USERNAME = os.environ.get("FAMTRACK_TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
 FAMTRACK_TELEGRAM_APP_NAME = os.environ.get("FAMTRACK_TELEGRAM_APP_NAME", "").strip().strip("/")
 FAMTRACK_MINIAPP_DIRECT_URL = os.environ.get("FAMTRACK_MINIAPP_DIRECT_URL", "").strip()
+FAMTRACK_ALERT_BOT_USERNAME = os.environ.get("FAMTRACK_ALERT_BOT_USERNAME", "").strip().lstrip("@")
 STATE_DIR = Path(os.environ.get("FAMTRACK_AGENT_STATE_DIR", str(Path.home() / ".local/state/famtrack-agent")))
 AUDIT_LOG = STATE_DIR / "audit.jsonl"
-PENDING_FILE = STATE_DIR / "pending.json"
 OFFSET_FILE = STATE_DIR / "offset"
-CODEX_WORKDIR = os.environ.get("FAMTRACK_AGENT_CODEX_WORKDIR", os.getcwd())
-CODEX_MODEL = os.environ.get("FAMTRACK_AGENT_CODEX_MODEL", "").strip()
-CODEX_BIN = os.environ.get("FAMTRACK_AGENT_CODEX_BIN", "").strip()
+CHAT_REGISTRY_FILE = STATE_DIR / "chats.json"
+REMINDER_DELIVERIES_FILE = STATE_DIR / "reminder-deliveries.json"
+INTERNAL_API_SECRET = os.environ.get("FAMTRACK_INTERNAL_API_SECRET", "").strip()
+REMINDER_INTERVAL_SECONDS = max(15, int(os.environ.get("FAMTRACK_AGENT_REMINDER_INTERVAL_SECONDS", "60") or "60"))
 ALLOWED_IDS = {int(value) for value in os.environ.get("FAMTRACK_ALLOWED_TELEGRAM_IDS", "").replace(" ", "").split(",") if value}
 OWNER_IDS = {int(value) for value in os.environ.get("FAMTRACK_OWNER_TELEGRAM_IDS", "").replace(" ", "").split(",") if value}
 if not OWNER_IDS:
@@ -59,15 +58,46 @@ def log(message: str) -> None:
     print(f"{datetime.now(timezone.utc).isoformat()} {message}", flush=True)
 
 
+def ensure_state_dir() -> None:
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    STATE_DIR.chmod(0o700)
+
+
 def audit(event: str, payload: dict[str, Any]) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_state_dir()
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": event,
         **payload,
     }
+    AUDIT_LOG.touch(mode=0o600, exist_ok=True)
+    AUDIT_LOG.chmod(0o600)
     with AUDIT_LOG.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def load_json_file(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else dict(fallback)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return dict(fallback)
+
+
+def save_private_text(path: Path, value: str) -> None:
+    ensure_state_dir()
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(value, encoding="utf-8")
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def save_json_file(path: Path, value: dict[str, Any]) -> None:
+    save_private_text(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def http_json(method: str, url: str, payload: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -201,11 +231,20 @@ def mini_app_url() -> str:
 
 def mini_app_direct_url(bot_username: str = "") -> str:
     if FAMTRACK_MINIAPP_DIRECT_URL:
-        return FAMTRACK_MINIAPP_DIRECT_URL.rstrip("/")
+        return fullscreen_mini_app_url(FAMTRACK_MINIAPP_DIRECT_URL)
     username = (FAMTRACK_TELEGRAM_BOT_USERNAME or bot_username).strip().lstrip("@")
     if username and FAMTRACK_TELEGRAM_APP_NAME:
-        return f"https://t.me/{username}/{FAMTRACK_TELEGRAM_APP_NAME}"
+        return fullscreen_mini_app_url(f"https://t.me/{username}/{FAMTRACK_TELEGRAM_APP_NAME}")
     return ""
+
+
+def fullscreen_mini_app_url(raw_url: str) -> str:
+    parsed = urlparse(raw_url.strip())
+    if parsed.scheme.lower() != "https" or (parsed.hostname or "").lower() != "t.me":
+        return raw_url.strip().rstrip("/")
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["mode"] = "fullscreen"
+    return parsed._replace(path=parsed.path.rstrip("/"), query=urlencode(query)).geturl()
 
 
 def app_entry_url(bot_username: str = "") -> str:
@@ -229,11 +268,23 @@ def app_entry_message(bot_username: str = "") -> str:
     return "FamTrack URL не настроен. Нужен FAMTRACK_PUBLIC_URL или Mini App link из BotFather /newapp."
 
 
+def alert_bot_entry_message() -> str:
+    if not FAMTRACK_ALERT_BOT_USERNAME:
+        return "Отдельный бот напоминаний пока не настроен."
+    url = f"https://t.me/{FAMTRACK_ALERT_BOT_USERNAME}?start=famtrack"
+    return (
+        "Напоминания отправляет отдельный бот. Один раз открой его и нажми Start:\n"
+        f"{url}\n\n"
+        "Для напоминаний в семейной группе добавь туда этого же бота."
+    )
+
+
 def configure_bot_surface(telegram: "Telegram") -> None:
     commands = [
         ("help", "команды FamTrack"),
         ("app", "открыть Mini App"),
         ("open", "ссылка на FamTrack"),
+        ("alerts", "подключить отдельные напоминания"),
         ("whoami", "кто я в системе"),
         ("status", "статус сервера"),
         ("projects", "проекты"),
@@ -244,8 +295,6 @@ def configure_bot_surface(telegram: "Telegram") -> None:
         ("balance", "баланс"),
         ("finance", "финансы"),
         ("newfamily", "owner: инвайт для новой семьи"),
-        ("plan", "owner: план без изменений"),
-        ("agent", "owner: агент Codex"),
     ]
     telegram.call("setMyCommands", {"commands": [{"command": command, "description": description} for command, description in commands]})
     url = mini_app_url()
@@ -256,7 +305,7 @@ def configure_bot_surface(telegram: "Telegram") -> None:
 class Telegram:
     def __init__(self, token: str):
         if not token:
-            raise AgentError("TELEGRAM_BOT_TOKEN is required")
+            raise AgentError("Telegram bot token is required")
         self.base = f"https://api.telegram.org/bot{token}"
 
     def call(self, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -276,10 +325,6 @@ class Telegram:
         if keyboard:
             payload["reply_markup"] = keyboard
         self.call("sendMessage", payload)
-
-    def answer_callback(self, callback_id: str, text: str) -> None:
-        self.call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
-
 
 class FamTrackClient:
     def __init__(self, bot_token: str):
@@ -305,9 +350,18 @@ class FamTrackClient:
     def health(self) -> dict[str, Any]:
         return http_json("GET", f"{FAMTRACK_API_BASE}/api/health")
 
+    def due_reminders(self) -> dict[str, Any]:
+        if not INTERNAL_API_SECRET:
+            return {"now": int(time.time() * 1000), "candidates": []}
+        return http_json(
+            "GET",
+            f"{FAMTRACK_API_BASE}/api/internal/reminders/due",
+            headers={"X-FamTrack-Agent-Secret": INTERNAL_API_SECRET},
+        )
+
     def post(self, telegram_user: dict[str, Any], path: str, body: dict[str, Any]) -> dict[str, Any]:
         envelope = self.get_data(telegram_user)
-        payload = {"revision": envelope["revision"], **body}
+        payload = {"revision": envelope["revision"], "mutationId": uuid.uuid4().hex, **body}
         return http_json("POST", f"{FAMTRACK_API_BASE}{path}", payload, headers=self.headers(telegram_user))
 
     def create_new_family_invite(self, telegram_user: dict[str, Any], family_name: str) -> dict[str, Any]:
@@ -364,6 +418,216 @@ def should_handle_message(message: dict[str, Any], bot_id: int, bot_username: st
     reply = message.get("reply_to_message") or {}
     reply_from = reply.get("from") or {}
     return reply_from.get("id") == bot_id
+
+
+def register_chat(client: FamTrackClient, message: dict[str, Any]) -> None:
+    telegram_user = user_from_update(message)
+    user_id = telegram_user.get("id")
+    if not is_allowed(user_id):
+        return
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    chat_type = chat.get("type")
+    if not isinstance(chat_id, int) or chat_type not in ("private", "group", "supergroup"):
+        return
+    try:
+        envelope = client.get_data(telegram_user)
+    except AgentError as exc:
+        audit("chat_registration_failed", {"telegram_id": user_id, "chat_id": chat_id, "reason": str(exc)})
+        return
+    family = envelope.get("data", {}).get("family") or {}
+    family_id = family.get("id")
+    if not family_id:
+        return
+    registry = load_json_file(CHAT_REGISTRY_FILE, {"private": {}, "groups": {}})
+    private_chats = registry.setdefault("private", {})
+    group_chats = registry.setdefault("groups", {})
+    now = int(time.time() * 1000)
+    if chat_type == "private":
+        private_chats[str(user_id)] = {
+            "chat_id": chat_id,
+            "family_id": family_id,
+            "title": chat.get("first_name") or telegram_user.get("first_name") or str(user_id),
+            "updated_at": now,
+        }
+    else:
+        key = str(chat_id)
+        previous = group_chats.get(key) if isinstance(group_chats.get(key), dict) else {}
+        family_ids = set(previous.get("family_ids") or [])
+        family_ids.add(family_id)
+        group_chats[key] = {
+            "chat_id": chat_id,
+            "family_ids": sorted(family_ids),
+            "title": chat.get("title") or str(chat_id),
+            "type": chat_type,
+            "updated_at": now,
+        }
+    save_json_file(CHAT_REGISTRY_FILE, registry)
+
+
+def resolve_reminder_destinations(
+    candidate: dict[str, Any],
+    registry: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    task = candidate.get("task") or {}
+    settings = candidate.get("settings") or {}
+    family_id = candidate.get("familyId")
+    task_mode = task.get("notificationMode") or "INHERIT"
+    mode = settings.get("taskNotificationMode", "PRIVATE") if task_mode == "INHERIT" else task_mode
+    if mode == "OFF" or not family_id:
+        return [], []
+
+    visible_to = {str(value) for value in (task.get("visibleTo") or []) if value}
+    private_task = bool(visible_to)
+    wants_private = private_task or mode in ("PRIVATE", "BOTH")
+    wants_group = not private_task and mode in ("GROUP", "BOTH")
+    destinations: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    seen_chat_ids: set[int] = set()
+
+    if wants_private:
+        recipient_ids = set(visible_to)
+        for field in ("assigneeId", "createdById"):
+            if task.get(field):
+                recipient_ids.add(str(task[field]))
+        members = {
+            str(member.get("id")): member
+            for member in (candidate.get("members") or [])
+            if isinstance(member, dict) and member.get("id")
+        }
+        private_chats = registry.get("private") if isinstance(registry.get("private"), dict) else {}
+        for member_id in sorted(recipient_ids):
+            member = members.get(member_id)
+            telegram_id = member.get("telegramId") if member else None
+            if not isinstance(telegram_id, int):
+                skipped.append(f"member-without-telegram:{member_id}")
+                continue
+            entry = private_chats.get(str(telegram_id))
+            if not isinstance(entry, dict) or entry.get("family_id") != family_id or not isinstance(entry.get("chat_id"), int):
+                skipped.append(f"private-chat-not-registered:{telegram_id}")
+                continue
+            chat_id = int(entry["chat_id"])
+            if chat_id not in seen_chat_ids:
+                destinations.append({"chat_id": chat_id, "kind": "PRIVATE", "member_id": member_id})
+                seen_chat_ids.add(chat_id)
+
+    if wants_group:
+        groups = registry.get("groups") if isinstance(registry.get("groups"), dict) else {}
+        matched_group = False
+        for entry in groups.values():
+            if not isinstance(entry, dict) or family_id not in (entry.get("family_ids") or []):
+                continue
+            chat_id = entry.get("chat_id")
+            if not isinstance(chat_id, int):
+                continue
+            matched_group = True
+            if chat_id not in seen_chat_ids:
+                destinations.append({"chat_id": chat_id, "kind": "GROUP"})
+                seen_chat_ids.add(chat_id)
+        if not matched_group:
+            skipped.append("group-chat-not-registered")
+
+    return destinations, skipped
+
+
+def reminder_delivery_key(candidate: dict[str, Any], chat_id: int) -> str:
+    task = candidate.get("task") or {}
+    source = "|".join((
+        str(candidate.get("familyId") or ""),
+        str(task.get("id") or ""),
+        str(task.get("reminderTime") or ""),
+        str(chat_id),
+    ))
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def format_task_reminder(candidate: dict[str, Any]) -> str:
+    task = candidate.get("task") or {}
+    title = str(task.get("title") or "Задача")
+    family_name = str(candidate.get("familyName") or "FamTrack")
+    lines = [f"⏰ {family_name}", title]
+    if task.get("dueDate"):
+        lines.append(f"Срок: {task['dueDate']}")
+    if task.get("points"):
+        lines.append(f"Награда: {task['points']} XP")
+    return "\n".join(lines)
+
+
+def dispatch_due_reminders(client: FamTrackClient, telegram: Telegram) -> None:
+    if not INTERNAL_API_SECRET:
+        return
+    response = client.due_reminders()
+    candidates = response.get("candidates") or []
+    if not isinstance(candidates, list) or not candidates:
+        return
+    registry = load_json_file(CHAT_REGISTRY_FILE, {"private": {}, "groups": {}})
+    state = load_json_file(REMINDER_DELIVERIES_FILE, {"delivered": {}, "skips": {}})
+    delivered = state.setdefault("delivered", {})
+    skips = state.setdefault("skips", {})
+    now = int(time.time() * 1000)
+    changed = False
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        destinations, skipped = resolve_reminder_destinations(candidate, registry)
+        task = candidate.get("task") or {}
+        task_id = str(task.get("id") or "unknown")
+        for reason in skipped:
+            skip_key = hashlib.sha256(
+                f"{candidate.get('familyId')}|{task_id}|{task.get('reminderTime')}|{reason}".encode("utf-8")
+            ).hexdigest()
+            previous = skips.get(skip_key) if isinstance(skips.get(skip_key), dict) else {}
+            if now - int(previous.get("reported_at") or 0) >= 6 * 60 * 60 * 1000:
+                audit("reminder_destination_skipped", {
+                    "family_id": candidate.get("familyId"),
+                    "task_id": task_id,
+                    "reason": reason,
+                })
+                skips[skip_key] = {"reported_at": now, "reason": reason, "task_id": task_id}
+                changed = True
+
+        for destination in destinations:
+            chat_id = int(destination["chat_id"])
+            delivery_key = reminder_delivery_key(candidate, chat_id)
+            if delivery_key in delivered:
+                continue
+            try:
+                telegram.send_message(chat_id, format_task_reminder(candidate))
+            except Exception as exc:
+                audit("reminder_delivery_failed", {
+                    "family_id": candidate.get("familyId"),
+                    "task_id": task_id,
+                    "chat_id": chat_id,
+                    "kind": destination.get("kind"),
+                    "reason": str(exc),
+                })
+                continue
+            delivered[delivery_key] = {
+                "delivered_at": now,
+                "family_id": candidate.get("familyId"),
+                "task_id": task_id,
+                "chat_id": chat_id,
+                "kind": destination.get("kind"),
+            }
+            changed = True
+            audit("reminder_delivered", delivered[delivery_key])
+
+    if changed:
+        delivered_items = sorted(
+            delivered.items(),
+            key=lambda item: int(item[1].get("delivered_at") or 0),
+            reverse=True,
+        )[:5000]
+        skip_items = sorted(
+            skips.items(),
+            key=lambda item: int(item[1].get("reported_at") or 0),
+            reverse=True,
+        )[:2000]
+        save_json_file(REMINDER_DELIVERIES_FILE, {
+            "delivered": dict(delivered_items),
+            "skips": dict(skip_items),
+        })
 
 
 def format_projects(data: dict[str, Any]) -> str:
@@ -424,7 +688,8 @@ def create_task(client: FamTrackClient, telegram_user: dict[str, Any], title: st
         "description": "",
         "status": "TODO",
         "priority": "MEDIUM",
-        "points": 50,
+        "difficulty": "MEDIUM",
+        "points": 40,
         "assigneeId": actor["id"],
         "createdById": actor["id"],
         "subtasks": [],
@@ -448,8 +713,7 @@ def complete_task(client: FamTrackClient, telegram_user: dict[str, Any], query: 
         match = next((task for task in tasks if query_lower in str(task.get("title", "")).lower()), None)
     if not match:
         return "Не нашёл такую открытую задачу."
-    match = {**match, "status": "DONE"}
-    client.post(telegram_user, "/api/tasks/save", {"task": match})
+    client.post(telegram_user, "/api/tasks/status", {"taskId": match["id"], "status": "DONE"})
     audit("task_done", {"telegram_id": telegram_user.get("id"), "task_id": match["id"]})
     return f"Готово: {match['title']}"
 
@@ -467,8 +731,11 @@ def add_shopping(client: FamTrackClient, telegram_user: dict[str, Any], title: s
         "isCompleted": False,
         "createdAt": int(time.time() * 1000),
     }
-    next_items = [item, *envelope["data"].get("shoppingList", [])]
-    client.post(telegram_user, "/api/batch", {"updates": {"shoppingList": next_items}})
+    client.post(telegram_user, "/api/shopping/items/add", {
+        "id": item["id"],
+        "title": item["title"],
+        "category": item["category"],
+    })
     audit("shopping_added", {"telegram_id": telegram_user.get("id"), "item_id": item["id"], "title": title})
     return f"Добавил в покупки: {title}"
 
@@ -499,78 +766,15 @@ def create_new_family_invite(client: FamTrackClient, telegram_user: dict[str, An
     )
 
 
-def load_pending() -> dict[str, Any]:
-    if not PENDING_FILE.exists():
-        return {}
-    try:
-        return json.loads(PENDING_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-
-
-def save_pending(pending: dict[str, Any]) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    PENDING_FILE.write_text(json.dumps(pending, ensure_ascii=False, indent=2), encoding="utf-8")
-    PENDING_FILE.chmod(0o600)
-
-
 def load_offset() -> int:
     try:
         return int(OFFSET_FILE.read_text(encoding="utf-8").strip())
-    except (FileNotFoundError, ValueError):
+    except (FileNotFoundError, OSError, ValueError):
         return 0
 
 
 def save_offset(offset: int) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    OFFSET_FILE.write_text(str(offset), encoding="utf-8")
-
-
-def codex_command(prompt: str, sandbox: str) -> list[str]:
-    codex = CODEX_BIN if CODEX_BIN else shutil.which("codex")
-    if not codex:
-        raise AgentError("Codex CLI не установлен или не виден в PATH на домашнем сервере.")
-    cmd = [
-        codex,
-        "exec",
-        "-C",
-        CODEX_WORKDIR,
-        "--sandbox",
-        sandbox,
-        "--skip-git-repo-check",
-    ]
-    if CODEX_MODEL:
-        cmd.extend(["--model", CODEX_MODEL])
-    cmd.append(prompt)
-    return cmd
-
-
-def run_codex(prompt: str, sandbox: str) -> str:
-    try:
-        command = codex_command(prompt, sandbox)
-    except AgentError as exc:
-        audit("codex_job_failed", {"reason": str(exc), "sandbox": sandbox})
-        return str(exc)
-
-    try:
-        completed = subprocess.run(
-            command,
-            text=True,
-            capture_output=True,
-            timeout=900,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        audit("codex_job_failed", {"reason": "timeout", "sandbox": sandbox})
-        return "Codex job превысил лимит 15 минут и был остановлен."
-    except Exception as exc:
-        audit("codex_job_failed", {"reason": str(exc), "sandbox": sandbox})
-        return f"Codex не запустился: {exc}"
-    output = "\n".join(part for part in (completed.stdout.strip(), completed.stderr.strip()) if part)
-    audit("codex_job_finished", {"exit_code": completed.returncode, "sandbox": sandbox})
-    if completed.returncode != 0:
-        return f"Codex завершился с кодом {completed.returncode}.\n\n{truncate(output, 3000)}"
-    return truncate(output or "Codex завершил задачу без вывода.", 3500)
+    save_private_text(OFFSET_FILE, str(offset))
 
 
 def handle_command(client: FamTrackClient, telegram: Telegram, message: dict[str, Any], bot_username: str) -> None:
@@ -589,6 +793,9 @@ def handle_command(client: FamTrackClient, telegram: Telegram, message: dict[str
         url = app_entry_url(bot_username)
         keyboard = {"inline_keyboard": [[{"text": "Открыть FamTrack", "url": url}]]} if url else None
         telegram.send_message(chat_id, app_entry_message(bot_username), message_id, keyboard)
+        return
+    if command in ("/alerts", "alerts"):
+        telegram.send_message(chat_id, alert_bot_entry_message(), message_id)
         return
     if command == "/whoami":
         data = client.get_data(telegram_user)
@@ -627,77 +834,14 @@ def handle_command(client: FamTrackClient, telegram: Telegram, message: dict[str
             return
         telegram.send_message(chat_id, create_new_family_invite(client, telegram_user, args), message_id)
         return
-    if command == "/plan":
-        if not is_owner(user_id):
-            telegram.send_message(chat_id, "Plan-режим агента доступен только owner.", message_id)
-            return
-        prompt = "Составь краткий, decision-complete план без изменения файлов и без выполнения команд: " + args
-        telegram.send_message(chat_id, "Думаю планом, без изменений...", message_id)
-        telegram.send_message(chat_id, run_codex(prompt, "read-only"), message_id)
-        return
-    if command == "/agent":
-        if not is_owner(user_id):
-            telegram.send_message(chat_id, "Codex agent доступен только owner.", message_id)
-            return
-        if not args:
-            telegram.send_message(chat_id, "Напиши: /agent что нужно сделать", message_id)
-            return
-        job_id = uuid.uuid4().hex[:12]
-        pending = load_pending()
-        pending[job_id] = {
-            "telegram_user": telegram_user,
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "prompt": args,
-            "created_at": time.time(),
-        }
-        save_pending(pending)
-        keyboard = {
-            "inline_keyboard": [[
-                {"text": "Approve", "callback_data": f"approve:{job_id}"},
-                {"text": "Reject", "callback_data": f"reject:{job_id}"},
-            ]]
-        }
-        telegram.send_message(chat_id, f"Запустить Codex agent?\n\n{args}", message_id, keyboard)
-        return
 
     telegram.send_message(chat_id, "Не понял команду. /help покажет варианты.", message_id)
 
 
-def handle_callback(telegram: Telegram, callback: dict[str, Any]) -> None:
-    from_user = callback.get("from") or {}
-    user_id = from_user.get("id")
-    if not is_owner(user_id):
-        telegram.answer_callback(callback["id"], "Только owner может подтверждать agent jobs.")
-        return
-    data = callback.get("data") or ""
-    action, _, job_id = data.partition(":")
-    pending = load_pending()
-    job = pending.pop(job_id, None)
-    save_pending(pending)
-    if not job:
-        telegram.answer_callback(callback["id"], "Job не найден или уже обработан.")
-        return
-    if action == "reject":
-        telegram.answer_callback(callback["id"], "Отклонено.")
-        telegram.send_message(int(job["chat_id"]), "Agent job отклонён.", int(job["message_id"]))
-        audit("codex_job_rejected", {"telegram_id": user_id, "job_id": job_id})
-        return
-    telegram.answer_callback(callback["id"], "Запускаю Codex...")
-    telegram.send_message(int(job["chat_id"]), "Запускаю Codex agent. Это может занять пару минут.", int(job["message_id"]))
-    audit("codex_job_approved", {"telegram_id": user_id, "job_id": job_id})
-    prompt = (
-        "Ты Codex на домашнем сервере FamTrack. Выполни задачу пользователя, "
-        "сохраняй секреты, не выполняй разрушительные действия без явной необходимости, "
-        "в конце дай короткий отчёт.\n\n"
-        f"Задача: {job['prompt']}"
-    )
-    telegram.send_message(int(job["chat_id"]), run_codex(prompt, "workspace-write"), int(job["message_id"]))
-
-
-HELP_TEXT = """FamTrack agent:
+HELP_TEXT = """FamTrack:
 /app
 /open
+/alerts
 /whoami
 /status
 /projects
@@ -710,20 +854,20 @@ HELP_TEXT = """FamTrack agent:
 
 Owner:
 /newfamily Родители
-/plan цель
-/agent задача для Codex
 
 В общем чате отвечаю на команды, reply или упоминание бота."""
 
 
 def main() -> int:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_state_dir()
     telegram = Telegram(BOT_TOKEN)
     client = FamTrackClient(BOT_TOKEN)
     me = telegram.call("getMe")
     bot_id = int(me["id"])
     bot_username = me.get("username", "")
-    log(f"started bot=@{bot_username} id={bot_id}")
+    log(
+        f"started family bot=@{bot_username} id={bot_id} commands=enabled alerts=external-service"
+    )
     try:
         configure_bot_surface(telegram)
         log("bot commands/menu configured")
@@ -733,15 +877,15 @@ def main() -> int:
     offset = load_offset()
     while True:
         try:
-            updates = telegram.call("getUpdates", {"offset": offset, "timeout": 45, "allowed_updates": ["message", "callback_query"]})
+            updates = telegram.call("getUpdates", {"offset": offset, "timeout": 45, "allowed_updates": ["message"]})
             for update in updates:
                 offset = max(offset, int(update["update_id"]) + 1)
                 save_offset(offset)
-                if "callback_query" in update:
-                    handle_callback(telegram, update["callback_query"])
-                    continue
                 message = update.get("message")
-                if not message or not should_handle_message(message, bot_id, bot_username):
+                if not message:
+                    continue
+                register_chat(client, message)
+                if not should_handle_message(message, bot_id, bot_username):
                     continue
                 handle_command(client, telegram, message, bot_username)
         except KeyboardInterrupt:

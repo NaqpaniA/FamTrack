@@ -11,7 +11,10 @@ services:
       FAMTRACK_AUTH_MODE: telegram
       FAMTRACK_DB_PATH: /data/famtrack.sqlite
       FAMTRACK_STATIC_DIR: /app/dist
+      FAMTRACK_TELEGRAM_PROXY: socks5h://host.docker.internal:11080
       PORT: "8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:18080:8080"
     volumes:

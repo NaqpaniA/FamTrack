@@ -122,7 +122,11 @@ def tool_finance_summary(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def post_with_revision(telegram_id: int, path: str, body: dict[str, Any]) -> dict[str, Any]:
     current = envelope(telegram_id)
-    return request_json("POST", path, telegram_id, {"revision": current["revision"], **body})
+    return request_json("POST", path, telegram_id, {
+        "revision": current["revision"],
+        "mutationId": uuid.uuid4().hex,
+        **body,
+    })
 
 
 def tool_create_task(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -136,7 +140,8 @@ def tool_create_task(arguments: dict[str, Any]) -> dict[str, Any]:
         "description": arguments.get("description", "") if isinstance(arguments.get("description"), str) else "",
         "status": "TODO",
         "priority": "MEDIUM",
-        "points": 50,
+        "difficulty": "MEDIUM",
+        "points": 40,
         "assigneeId": actor["id"],
         "createdById": actor["id"],
         "subtasks": [],
@@ -177,7 +182,11 @@ def tool_add_shopping(arguments: dict[str, Any]) -> dict[str, Any]:
         "isCompleted": False,
         "createdAt": int(time.time() * 1000),
     }
-    result = post_with_revision(telegram_id, "/api/batch", {"updates": {"shoppingList": [item, *data.get("shoppingList", [])]}})
+    result = post_with_revision(telegram_id, "/api/shopping/items/add", {
+        "id": item["id"],
+        "title": item["title"],
+        "category": item["category"],
+    })
     return {"item": item, "revision": result["revision"]}
 
 
