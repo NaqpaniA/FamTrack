@@ -38,6 +38,108 @@ const EPIC_COLOR_CLASSES: Record<string, string> = {
 
 const getEpicColorClass = (color: string) => EPIC_COLOR_CLASSES[color] || EPIC_COLOR_CLASSES['bg-blue-500'];
 
+const formatTimeAgo = (timestamp: number) => {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return 'Только что';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes} м. назад`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} ч. назад`;
+    return 'Давно';
+};
+
+const ProjectsWidget = ({
+    data,
+    visibleTasks,
+    onNavigate,
+    onAddEpic
+}: {
+    data: AppData;
+    visibleTasks: Task[];
+    onNavigate: (tab: Tab, epicId?: string) => void;
+    onAddEpic: () => void;
+}) => {
+    const visibleEpics = data.epics.filter(epic => isVisible(epic, data.currentUser));
+    const canManageEpics = data.currentUser.role === 'OWNER' || data.currentUser.role === 'ADMIN';
+    return (
+        <div>
+            <SectionHeader
+                title="Проекты & Цели"
+                action={<button type="button" onClick={() => onNavigate('TASKS')} className="text-sm font-medium text-blue-600">Все</button>}
+            />
+            <div className="no-scrollbar flex snap-x-app gap-3 overflow-x-auto pb-1 pt-3">
+                {visibleEpics.map(epic => {
+                    const epicTasks = visibleTasks.filter(task => task.epicId === epic.id);
+                    const total = epicTasks.length;
+                    const done = epicTasks.filter(task => task.status === 'DONE').length;
+                    const progress = total > 0 ? done / total * 100 : 0;
+                    const epicColorClass = getEpicColorClass(epic.color);
+                    return (
+                        <button
+                            type="button"
+                            key={epic.id}
+                            onClick={() => onNavigate('TASKS', epic.id)}
+                            className={`relative h-28 min-w-[148px] snap-start overflow-hidden rounded-[14px] p-3 text-left text-white shadow-md transition-transform active:scale-95 ${epicColorClass}`}
+                        >
+                            <div className={`absolute inset-0 opacity-90 ${epicColorClass}`} />
+                            <div className="absolute right-0 top-0 -mr-4 -mt-4 rounded-full bg-white/10 p-8 blur-xl" />
+                            <div className="relative z-10 flex h-full flex-col justify-between">
+                                <div className="line-clamp-2 text-[16px] font-bold leading-tight">{epic.title}</div>
+                                <div>
+                                    <div className="mb-1 flex justify-between text-xs opacity-80"><span>Прогресс</span><span>{Math.round(progress)}%</span></div>
+                                    <div className="h-1.5 overflow-hidden rounded-full bg-black/20"><div className="h-full rounded-full bg-white/90 transition-all duration-500" style={{ width: `${progress}%` }} /></div>
+                                </div>
+                            </div>
+                        </button>
+                    );
+                })}
+                {canManageEpics ? (
+                    <button
+                        type="button"
+                        onClick={onAddEpic}
+                        aria-label="Создать проект"
+                        className="flex h-28 min-w-[48px] shrink-0 snap-start flex-col items-center justify-center rounded-[14px] border-2 border-dashed border-gray-300 text-gray-400 transition-colors active:bg-gray-50"
+                    >
+                        <Plus size={24} />
+                    </button>
+                ) : null}
+            </div>
+        </div>
+    );
+};
+
+const ActivityWidget = ({ data }: { data: AppData }) => {
+    const recentEvents = (data.events || []).slice(0, 5);
+    return (
+        <div>
+            <div className="mb-3 flex items-center justify-between">
+                <h2 className="flex items-center gap-2 text-[17px] font-bold"><Activity size={18} /> Активность</h2>
+            </div>
+            <div className="space-y-3">
+                {recentEvents.length === 0 ? (
+                    <div className="rounded-[14px] border border-dashed border-gray-200 bg-gray-50 p-4 text-center text-sm text-gray-400">Пока тишина...</div>
+                ) : recentEvents.map(event => {
+                    const actor = data.members.find(member => member.id === event.actorId);
+                    const config = EVENT_CONFIG[event.type];
+                    if (!actor || !config) return null;
+                    return (
+                        <div key={event.id} className="app-panel flex gap-3 p-3 animate-in slide-in-from-bottom-2">
+                            <div className="relative">
+                                <Avatar user={actor} size="md" />
+                                <div className={`absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-white ${config.color}`}><config.icon size={10} /></div>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="mb-0.5 flex justify-between gap-2 text-xs text-gray-400"><span className="truncate">{actor.name}</span><span className="shrink-0">{formatTimeAgo(event.timestamp)}</span></div>
+                                <div className="text-sm font-medium leading-tight text-gray-900">{config.format(event.payload)}</div>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
 export const DashboardScreen = ({ 
     data, 
     onTaskClick, 
@@ -71,10 +173,7 @@ export const DashboardScreen = ({
     }
 }) => {
     const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser));
-    const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser));
     const visibleAccounts = data.accounts.filter(a => isVisible(a, data.currentUser));
-    const recentEvents = (data.events || []).slice(0, 5);
-    const canManageEpics = data.currentUser.role === 'OWNER' || data.currentUser.role === 'ADMIN';
 
     // Active Tasks: Not done AND (Overdue OR Today OR No Date)
     const activeTasksCount = visibleTasks.filter(t => {
@@ -85,16 +184,10 @@ export const DashboardScreen = ({
 
     const totalBalance = visibleAccounts.reduce((sum, acc) => sum + acc.balance, 0);
     const streak = data.currentUser.streak || 0;
-
-    const formatTimeAgo = (timestamp: number) => {
-        const seconds = Math.floor((Date.now() - timestamp) / 1000);
-        if (seconds < 60) return 'Только что';
-        const minutes = Math.floor(seconds / 60);
-        if (minutes < 60) return `${minutes} м. назад`;
-        const hours = Math.floor(minutes / 60);
-        if (hours < 24) return `${hours} ч. назад`;
-        return 'Давно';
-    };
+    const householdEnabled = data.capabilities?.routines === true;
+    const notesWidget = <NotesWidget data={data} onOpenAll={onOpenNotes} onCreate={onAddNote} />;
+    const projectsWidget = <ProjectsWidget data={data} visibleTasks={visibleTasks} onNavigate={onNavigate} onAddEpic={onAddEpic} />;
+    const activityWidget = <ActivityWidget data={data} />;
 
     return (
         <Screen className="animate-in fade-in duration-300">
@@ -145,64 +238,19 @@ export const DashboardScreen = ({
                 </button>
             </div>
 
-            {data.capabilities?.routines ? (
+            {householdEnabled ? (
                 <React.Suspense fallback={<div className="h-32 animate-pulse rounded-[20px] bg-black/5" aria-label="Загружаю Household Pulse" />}>
-                    <HouseholdDashboard data={data} actions={householdActions} />
+                    <HouseholdDashboard
+                        data={data}
+                        actions={householdActions}
+                        externalWidgets={{ notes: notesWidget, projects: projectsWidget, activity: activityWidget }}
+                    />
                 </React.Suspense>
             ) : null}
 
-            <NotesWidget data={data} onOpenAll={onOpenNotes} onCreate={onAddNote} />
+            {!householdEnabled ? notesWidget : null}
 
-            {/* Epics / Projects Scroll */}
-            <div>
-                <SectionHeader
-                    title="Проекты & Цели"
-                    action={<button onClick={() => onNavigate('TASKS')} className="text-blue-600 text-sm font-medium">Все</button>}
-                />
-                <div className="flex gap-3 overflow-x-auto pt-3 pb-1 no-scrollbar snap-x-app">
-                    {visibleEpics.map(epic => {
-                         const epicTasks = visibleTasks.filter(t => t.epicId === epic.id);
-                         const total = epicTasks.length;
-                         const done = epicTasks.filter(t => t.status === 'DONE').length;
-                         const progress = total > 0 ? (done / total) * 100 : 0;
-                         const epicColorClass = getEpicColorClass(epic.color);
-
-                         return (
-                             <button
-                                type="button"
-                                key={epic.id} 
-                                onClick={() => onNavigate('TASKS', epic.id)}
-                                className={`min-w-[148px] h-28 p-3 rounded-[14px] text-left text-white relative overflow-hidden shadow-md transform transition-transform active:scale-95 cursor-pointer snap-start ${epicColorClass}`}
-                             >
-                                 <div className={`absolute inset-0 ${epicColorClass} opacity-90`} />
-                                 <div className="absolute top-0 right-0 p-8 bg-white/10 rounded-full -mr-4 -mt-4 blur-xl"></div>
-                                 <div className="relative z-10 flex flex-col h-full justify-between">
-                                     <div className="font-bold text-[16px] leading-tight line-clamp-2">{epic.title}</div>
-                                     <div>
-                                         <div className="flex justify-between text-xs mb-1 opacity-80">
-                                            <span>Прогресс</span>
-                                            <span>{Math.round(progress)}%</span>
-                                         </div>
-                                         <div className="h-1.5 bg-black/20 rounded-full overflow-hidden">
-                                            <div className="h-full bg-white/90 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
-                                         </div>
-                                     </div>
-                                 </div>
-                             </button>
-                         )
-                    })}
-                    {canManageEpics && (
-                        <button
-                            type="button"
-                            onClick={onAddEpic}
-                            aria-label="Создать проект"
-                            className="min-w-[48px] h-28 rounded-[14px] border-2 border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 shrink-0 active:bg-gray-50 transition-colors snap-start"
-                        >
-                            <Plus size={24} />
-                        </button>
-                    )}
-                </div>
-            </div>
+            {!householdEnabled ? projectsWidget : null}
 
              {/* Today Tasks */}
              <div>
@@ -234,45 +282,7 @@ export const DashboardScreen = ({
                 </Panel>
             </div>
 
-            {/* Activity Feed */}
-            <div>
-                <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-[17px] font-bold flex items-center gap-2"><Activity size={18} /> Активность</h2>
-                </div>
-                <div className="space-y-3">
-                    {recentEvents.length === 0 ? (
-                        <div className="text-center p-4 bg-gray-50 rounded-[14px] text-gray-400 text-sm border border-dashed border-gray-200">
-                            Пока тишина...
-                        </div>
-                    ) : (
-                        recentEvents.map(event => {
-                            const actor = data.members.find(m => m.id === event.actorId);
-                            const config = EVENT_CONFIG[event.type];
-                            if (!actor || !config) return null;
-
-                            return (
-                                <div key={event.id} className="flex gap-3 app-panel p-3 animate-in slide-in-from-bottom-2">
-                                    <div className="relative">
-                                        <Avatar user={actor} size="md" />
-                                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center ${config.color} border-2 border-white`}>
-                                            <config.icon size={10} />
-                                        </div>
-                                    </div>
-                                    <div className="flex-1">
-                                        <div className="text-xs text-gray-400 mb-0.5 flex justify-between">
-                                            <span>{actor.name}</span>
-                                            <span>{formatTimeAgo(event.timestamp)}</span>
-                                        </div>
-                                        <div className="text-sm font-medium text-gray-900 leading-tight">
-                                            {config.format(event.payload)}
-                                        </div>
-                                    </div>
-                                </div>
-                            )
-                        })
-                    )}
-                </div>
-            </div>
+            {!householdEnabled ? activityWidget : null}
         </Screen>
     );
 };

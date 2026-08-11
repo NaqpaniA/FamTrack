@@ -23,7 +23,7 @@ import type { Wishlist, WishlistItem } from './wishlist.model';
 import { Panel, SectionHeader } from './ui-kit';
 import { formatMoney } from './utils';
 
-const DASHBOARD_WIDGETS = ['routines', 'day-pulse', 'house-health', 'history', 'leaderboard', 'wishlists'] as const;
+const DASHBOARD_WIDGETS = ['routines', 'day-pulse', 'house-health', 'history', 'leaderboard', 'projects', 'activity', 'notes', 'wishlists'] as const;
 type DashboardWidget = typeof DASHBOARD_WIDGETS[number];
 
 const WIDGET_LABELS: Record<DashboardWidget, string> = {
@@ -32,6 +32,9 @@ const WIDGET_LABELS: Record<DashboardWidget, string> = {
     'house-health': 'House Health',
     history: 'История рутин',
     leaderboard: 'Лидерборд',
+    projects: 'Проекты и цели',
+    activity: 'Активность',
+    notes: 'Заметки',
     wishlists: 'Желания'
 };
 
@@ -58,7 +61,15 @@ interface HouseholdActions {
     reserveWishlistItem: (wishlistId: string, itemId: string, reserved: boolean) => void;
 }
 
-export const HouseholdDashboard = ({ data, actions }: { data: AppData; actions: HouseholdActions }) => {
+export const HouseholdDashboard = ({
+    data,
+    actions,
+    externalWidgets = {}
+}: {
+    data: AppData;
+    actions: HouseholdActions;
+    externalWidgets?: Partial<Record<'projects' | 'activity' | 'notes', React.ReactNode>>;
+}) => {
     const preferences = data.dashboardPreferences || {
         userId: data.currentUser.id,
         scope: 'FAMILY' as const,
@@ -95,6 +106,9 @@ export const HouseholdDashboard = ({ data, actions }: { data: AppData; actions: 
         'house-health': <HouseHealthWidget data={data} />,
         history: <RoutineHistoryWidget data={data} />,
         leaderboard: <LeaderboardWidget data={data} />,
+        projects: externalWidgets.projects || null,
+        activity: externalWidgets.activity || null,
+        notes: externalWidgets.notes || null,
         wishlists: <WishlistWidget data={data} actions={actions} />
     };
 
