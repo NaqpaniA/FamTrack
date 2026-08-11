@@ -54,7 +54,7 @@ export const PantryView = ({ data, onAdjust }: { data: AppData; onAdjust: (input
     const [error, setError] = useState('');
 
     useEffect(() => {
-        if (!data.capabilities?.receiptOcr) return;
+        if (!data.capabilities?.pantry && !data.capabilities?.receiptOcr) return;
         let active = true;
         void api.listPurchaseImports().then(jobs => {
             if (!active) return;
@@ -68,7 +68,7 @@ export const PantryView = ({ data, onAdjust }: { data: AppData; onAdjust: (input
             setAmountRubles(open.totalAmount ? String(open.totalAmount / 100).replace('.', ',') : '');
         }).catch(() => undefined);
         return () => { active = false; };
-    }, [data.capabilities?.receiptOcr, data.currentUser.id, data.accounts[0]?.id, isChild]);
+    }, [data.capabilities?.pantry, data.capabilities?.receiptOcr, data.currentUser.id, data.accounts[0]?.id, isChild]);
 
     useEffect(() => {
         if (!draftId || !job || !['QUEUED', 'PROCESSING'].includes(job.status)) return;

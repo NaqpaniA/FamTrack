@@ -59,7 +59,14 @@ export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: 
     };
 
     return (
-        <div className="fixed inset-0 z-[80] flex flex-col bg-black text-white" style={{ paddingTop: 'var(--telegram-content-safe-top)', paddingBottom: 'var(--telegram-content-safe-bottom)' }}>
+        <div
+            className="fixed left-0 right-0 top-0 z-[80] flex flex-col bg-black text-white"
+            style={{
+                height: 'var(--app-visual-height, var(--tg-viewport-height, 100dvh))',
+                paddingTop: 'var(--app-safe-top)',
+                paddingBottom: 'var(--app-safe-bottom)'
+            }}
+        >
             <div className="flex items-center justify-between p-4">
                 <div className="flex items-center gap-2 font-black"><ScanLine size={20} /> Штрихкод</div>
                 <button type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white/10" aria-label="Закрыть сканер"><X size={20} /></button>

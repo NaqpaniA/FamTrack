@@ -241,12 +241,22 @@ const RoutinesWidget = ({ data, actions }: { data: AppData; actions: HouseholdAc
 
 const DayPulseWidget = ({ data }: { data: AppData }) => {
     const summary = data.routineSummary;
-    const today = new Date().toISOString().slice(0, 10);
+    const timezone = data.family?.settings.timezone || 'UTC';
+    const today = dateKeyInTimezone(Date.now(), timezone);
+    const scope = data.dashboardPreferences?.scope || 'FAMILY';
     const expenses = data.transactions
-        .filter(transaction => transaction.type === 'EXPENSE' && transaction.date.slice(0, 10) === today)
+        .filter(transaction => (
+            transaction.type === 'EXPENSE'
+            && dateKeyInTimezone(transaction.date, timezone) === today
+            && (scope === 'FAMILY' || transaction.createdById === data.currentUser.id)
+        ))
         .reduce((total, transaction) => total + transaction.amount, 0);
     const nextFocus = (data.routines || [])
-        .filter(routine => !routine.paused && routine.kind === 'SCHEDULED')
+        .filter(routine => (
+            !routine.paused
+            && routine.kind === 'SCHEDULED'
+            && routine.visibility === scope
+        ))
         .sort((left, right) => (left.nextOccurrenceDate || '9999').localeCompare(right.nextOccurrenceDate || '9999'))[0];
     return (
         <div>
@@ -259,6 +269,23 @@ const DayPulseWidget = ({ data }: { data: AppData }) => {
             {nextFocus && <div className="mt-2 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs text-blue-900"><span className="font-black">Следующий фокус:</span> {nextFocus.title}</div>}
         </div>
     );
+};
+
+const dateKeyInTimezone = (value: number | string, timezone: string) => {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return typeof value === 'string' ? value.slice(0, 10) : '';
+    try {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).formatToParts(date);
+        const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+        return `${values.year}-${values.month}-${values.day}`;
+    } catch {
+        return date.toISOString().slice(0, 10);
+    }
 };
 
 const PulseMetric = ({ value, label }: { value: string; label: string }) => (
