@@ -1,9 +1,11 @@
 
 import { FinancialGoal } from './finance.model';
+import { TaskNotificationMode } from './settings.model';
 
 // --- Types ---
 
 export type Priority = 'HIGH' | 'MEDIUM' | 'LOW';
+export type TaskDifficulty = 'EASY' | 'MEDIUM' | 'HARD';
 export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE';
 export type Frequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
 
@@ -19,6 +21,7 @@ export interface Task {
   description?: string;
   status: TaskStatus;
   priority: Priority;
+  difficulty: TaskDifficulty;
   points: number;
   assigneeId?: string;
   createdById: string;
@@ -31,6 +34,10 @@ export interface Task {
   visibleTo?: string[];
   isRecurring?: boolean;
   frequency?: Frequency;
+  notificationMode?: TaskNotificationMode;
+  completedAt?: number;
+  completedById?: string;
+  rewardedAt?: number;
 }
 
 export interface Epic {
@@ -51,6 +58,22 @@ export const PRIORITIES: Record<Priority, { label: string, color: string, iconCo
   MEDIUM: { label: 'Средний', color: 'bg-orange-100 text-orange-700', iconColor: 'text-orange-500' },
   LOW: { label: 'Низкий', color: 'bg-blue-100 text-blue-700', iconColor: 'text-blue-500' },
 };
+
+export const TASK_DIFFICULTIES: Record<TaskDifficulty, { label: string; hint: string }> = {
+  EASY: { label: 'Легко', hint: 'Небольшая задача' },
+  MEDIUM: { label: 'Обычно', hint: 'Нужно приложить усилия' },
+  HARD: { label: 'Сложно', hint: 'Большая или неприятная задача' },
+};
+
+const TASK_XP: Record<TaskDifficulty, Record<Priority, number>> = {
+  EASY: { LOW: 15, MEDIUM: 20, HIGH: 25 },
+  MEDIUM: { LOW: 30, MEDIUM: 40, HIGH: 50 },
+  HARD: { LOW: 55, MEDIUM: 70, HIGH: 90 },
+};
+
+export const calculateTaskXp = (difficulty: TaskDifficulty, priority: Priority): number => (
+  TASK_XP[difficulty][priority]
+);
 
 // --- Utils ---
 

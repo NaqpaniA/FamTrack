@@ -16,6 +16,7 @@ export interface User {
   telegramUsername?: string;
   telegramFirstName?: string;
   telegramLastName?: string;
+  avatarUrl?: string;
   // Streak System
   streak: number;
   lastLoginDate?: string; // ISO Date YYYY-MM-DD
@@ -27,6 +28,9 @@ export interface Reward {
   cost: number;
   icon: string; // Emoji
   description?: string;
+  isActive?: boolean;
+  createdById?: string;
+  updatedAt?: number;
 }
 
 export interface RewardLog {

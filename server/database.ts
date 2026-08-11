@@ -21,6 +21,7 @@ import type { ShoppingItem } from '../shopping.model.js';
 import type { AppEvent } from '../events.model.js';
 import type { Note } from '../notes.model.js';
 import type { AuthContext } from './auth.js';
+import { DEFAULT_FAMILY_SETTINGS, normalizeFamilySettings } from '../settings.model.js';
 
 const require = createRequire(import.meta.url);
 
@@ -28,8 +29,9 @@ type Row = Record<string, unknown>;
 
 export const DEFAULT_FAMILY_ID = 'fam-default';
 const DEFAULT_FAMILY_NAME = 'Naqpania Family';
-const MIGRATION_VERSION = '2026-06-19-notes-v1';
+const MIGRATION_VERSION = '2026-08-11-concurrent-sync-and-xp-v2';
 const DEMO_PLAYSTATION_CLEANUP_MIGRATION = '2026-06-19-remove-demo-playstation-savings-goal';
+const MUTATION_RECEIPT_RETENTION_MS = 1000 * 60 * 60 * 24 * 30;
 const DEMO_PLAYSTATION_SAVINGS_GOAL = {
     id: 'sg1',
     title: 'Sony PlayStation 5',
@@ -79,18 +81,48 @@ const toNumber = (value: unknown, fallback = 0) => {
     return Number.isFinite(next) ? next : fallback;
 };
 
+const normalizeAvatarUrl = (value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) return undefined;
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' ? url.toString() : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
 const cloneInitialData = (): AppData => JSON.parse(JSON.stringify(INITIAL_DATA));
 
 const hashInput = (value: string) => createHash('sha256').update(value).digest('hex');
 
 const backupDatabaseFile = (dbPath: string) => {
+    if (fs.statSync(dbPath).size === 0) return;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupPath = `${dbPath}.backup-${stamp}`;
     fs.copyFileSync(dbPath, backupPath);
+    const retention = Math.max(1, Math.round(Number(process.env.FAMTRACK_BACKUP_RETENTION) || 10));
+    const directory = path.dirname(dbPath);
+    const prefix = `${path.basename(dbPath)}.backup-`;
+    const backups = fs.readdirSync(directory)
+        .filter(name => name.startsWith(prefix))
+        .sort()
+        .reverse();
+    for (const name of backups.slice(retention)) {
+        fs.unlinkSync(path.join(directory, name));
+    }
 };
 
 export class RevisionConflictError extends Error {
     status = 409;
+}
+
+export class RevisionRequiredError extends Error {
+    status = 428;
+}
+
+export class MutationIdConflictError extends Error {
+    status = 409;
+    code = 'IDEMPOTENCY_CONFLICT';
 }
 
 export class InviteError extends Error {
@@ -134,8 +166,88 @@ export class FamTrackDatabase {
         };
     }
 
+    integrityReport() {
+        const quickCheck = this.selectRows('PRAGMA quick_check')
+            .flatMap(row => Object.values(row).map(value => String(value)));
+        const families = this.listFamilyIds().map(familyId => {
+            const data = this.getAppData(familyId);
+            return {
+                familyId,
+                revision: this.getRevision(familyId),
+                counts: {
+                    members: data.members.length,
+                    epics: data.epics.length,
+                    tasks: data.tasks.length,
+                    accounts: data.accounts.length,
+                    goals: data.goals.length,
+                    savingsGoals: data.savingsGoals.length,
+                    contributions: data.contributions.length,
+                    subscriptions: data.subscriptions.length,
+                    budgets: data.budgets.length,
+                    transactions: data.transactions.length,
+                    rewards: data.rewards.length,
+                    rewardLogs: data.rewardLogs.length,
+                    inventory: data.inventory.length,
+                    shoppingList: data.shoppingList.length,
+                    notes: data.notes.length,
+                    events: data.events.length
+                }
+            };
+        });
+        return {
+            ok: quickCheck.length === 1 && quickCheck[0].toLowerCase() === 'ok',
+            quickCheck,
+            families
+        };
+    }
+
     getRevision(familyId = DEFAULT_FAMILY_ID) {
         return Number(this.selectValue('SELECT revision FROM families WHERE id = ?', [familyId]) || 0);
+    }
+
+    listFamilyIds() {
+        return this.selectRows('SELECT id FROM families ORDER BY created_at, id').map(row => String(row.id));
+    }
+
+    syncTelegramProfile(auth: AuthContext) {
+        if (!auth.telegramId) return false;
+        const byId = this.selectRows('SELECT * FROM users WHERE telegram_id = ? LIMIT 1', [auth.telegramId])[0];
+        const byUsername = !byId && auth.username
+            ? this.selectRows('SELECT * FROM users WHERE lower(telegram_username) = ? LIMIT 1', [auth.username.toLowerCase()])[0]
+            : undefined;
+        const row = byId || byUsername;
+        if (!row) return false;
+        const current = rowToUser(row);
+        const next = {
+            telegramId: auth.telegramId,
+            telegramUsername: auth.username || current.telegramUsername,
+            telegramFirstName: auth.firstName || current.telegramFirstName,
+            telegramLastName: auth.lastName || current.telegramLastName,
+            avatarUrl: normalizeAvatarUrl(auth.photoUrl) || current.avatarUrl
+        };
+        if (current.telegramId === next.telegramId
+            && current.telegramUsername === next.telegramUsername
+            && current.telegramFirstName === next.telegramFirstName
+            && current.telegramLastName === next.telegramLastName
+            && current.avatarUrl === next.avatarUrl) {
+            return false;
+        }
+        return this.persistedTransaction(() => {
+            this.db.run(
+                `UPDATE users SET telegram_id = ?, telegram_username = ?, telegram_first_name = ?,
+                 telegram_last_name = ?, avatar_url = ? WHERE id = ?`,
+                [
+                    next.telegramId,
+                    nullable(next.telegramUsername),
+                    nullable(next.telegramFirstName),
+                    nullable(next.telegramLastName),
+                    nullable(next.avatarUrl),
+                    current.id
+                ]
+            );
+            this.db.run('UPDATE families SET revision = revision + 1 WHERE id = ?', [current.familyId]);
+            return true;
+        });
     }
 
     getAppData(familyOrActor?: string | User, currentUserOverride?: User): AppData {
@@ -190,27 +302,107 @@ export class FamTrackDatabase {
         const actor = typeof mutatorOrActor === 'object' ? mutatorOrActor : currentUserOverride;
 
         const revision = this.getRevision(familyId);
-        if (typeof expectedRevision === 'number' && expectedRevision !== revision) {
+        if (typeof expectedRevision !== 'number') {
+            throw new RevisionRequiredError('A loaded server revision is required before changing family data');
+        }
+        if (expectedRevision !== revision) {
             throw new RevisionConflictError(`Data changed on the server; reload required (server revision ${revision})`);
         }
 
-        this.db.run('BEGIN IMMEDIATE');
-        try {
+        return this.persistedTransaction(() => {
             const current = this.getAppData(familyId, actor);
             const next = mutator(current);
             this.replaceFamilyData(familyId, next);
             const nextRevision = revision + 1;
             this.setFamilyRevision(familyId, nextRevision);
-            this.db.run('COMMIT');
-            this.persist();
             return {
                 revision: nextRevision,
                 data: this.getAppData(familyId, actor)
             };
-        } catch (error) {
-            this.db.run('ROLLBACK');
-            throw error;
+        });
+    }
+
+    mutateCommand(
+        familyId: string,
+        expectedRevision: number | null | undefined,
+        receipt: { mutationId: string; actorId: string; operation: string; requestHash: string },
+        mutator: (data: AppData) => AppData,
+        actor: User
+    ) {
+        if (typeof expectedRevision !== 'number') {
+            throw new RevisionRequiredError('A loaded server revision is required before changing family data');
         }
+
+        const existing = this.selectRows(
+            'SELECT * FROM mutation_receipts WHERE family_id = ? AND mutation_id = ?',
+            [familyId, receipt.mutationId]
+        )[0];
+        if (existing) {
+            this.assertMatchingReceipt(existing, receipt);
+            const revision = this.getRevision(familyId);
+            return {
+                revision,
+                data: this.getAppData(familyId, actor),
+                command: {
+                    duplicate: true,
+                    rebased: expectedRevision !== revision
+                }
+            };
+        }
+
+        return this.persistedTransaction(() => {
+            const revision = this.getRevision(familyId);
+            const receiptInTransaction = this.selectRows(
+                'SELECT * FROM mutation_receipts WHERE family_id = ? AND mutation_id = ?',
+                [familyId, receipt.mutationId]
+            )[0];
+            if (receiptInTransaction) {
+                this.assertMatchingReceipt(receiptInTransaction, receipt);
+                return {
+                    revision,
+                    data: this.getAppData(familyId, actor),
+                    command: {
+                        duplicate: true,
+                        rebased: expectedRevision !== revision
+                    }
+                };
+            }
+            if (expectedRevision > revision) {
+                throw new RevisionConflictError(
+                    `Client revision ${expectedRevision} is ahead of server revision ${revision}`
+                );
+            }
+
+            const current = this.getAppData(familyId, actor);
+            const next = mutator(current);
+            this.replaceFamilyData(familyId, next);
+            const nextRevision = revision + 1;
+            this.setFamilyRevision(familyId, nextRevision);
+            const now = Date.now();
+            this.db.run(
+                `INSERT INTO mutation_receipts (
+                    family_id, mutation_id, actor_id, operation, request_hash, revision, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    familyId,
+                    receipt.mutationId,
+                    receipt.actorId,
+                    receipt.operation,
+                    receipt.requestHash,
+                    nextRevision,
+                    now
+                ]
+            );
+            this.db.run('DELETE FROM mutation_receipts WHERE created_at < ?', [now - MUTATION_RECEIPT_RETENTION_MS]);
+            return {
+                revision: nextRevision,
+                data: this.getAppData(familyId, actor),
+                command: {
+                    duplicate: false,
+                    rebased: expectedRevision !== revision
+                }
+            };
+        });
     }
 
     exportEnvelope(familyOrActor?: string | User) {
@@ -260,23 +452,24 @@ export class FamTrackDatabase {
             createdAt: now,
             expiresAt: now + (options.ttlMs || 1000 * 60 * 60 * 24 * 14)
         };
-        this.db.run(
-            `INSERT INTO family_invites (
-                token, family_id, family_name, role, created_by_id, created_at, expires_at, used_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                invite.token,
-                nullable(invite.familyId),
-                nullable(invite.familyName),
-                invite.role,
-                invite.createdById,
-                invite.createdAt,
-                nullable(invite.expiresAt),
-                null
-            ]
-        );
-        this.persist();
-        return invite;
+        return this.persistedTransaction(() => {
+            this.db.run(
+                `INSERT INTO family_invites (
+                    token, family_id, family_name, role, created_by_id, created_at, expires_at, used_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    invite.token,
+                    nullable(invite.familyId),
+                    nullable(invite.familyName),
+                    invite.role,
+                    invite.createdById,
+                    invite.createdAt,
+                    nullable(invite.expiresAt),
+                    null
+                ]
+            );
+            return invite;
+        });
     }
 
     acceptFamilyInvite(token: string, auth: AuthContext) {
@@ -308,18 +501,21 @@ export class FamTrackDatabase {
             isActive: true,
             telegramId: auth.telegramId,
             telegramUsername: auth.username,
+            telegramFirstName: auth.firstName,
+            telegramLastName: auth.lastName,
+            avatarUrl: normalizeAvatarUrl(auth.photoUrl),
             streak: 0
         };
 
-        this.db.run('BEGIN IMMEDIATE');
-        try {
+        return this.persistedTransaction(() => {
             if (!invite.familyId) {
                 this.insertFamily({
                     id: familyId,
                     name: invite.familyName || `${user.name}'s family`,
                     ownerUserId: user.id,
                     createdAt: Date.now(),
-                    revision: 1
+                    revision: 1,
+                    settings: { ...DEFAULT_FAMILY_SETTINGS }
                 });
                 this.replaceFamilyData(familyId, createNewFamilyData(familyId, user, invite.familyName));
             } else {
@@ -327,13 +523,8 @@ export class FamTrackDatabase {
                 this.setFamilyRevision(familyId, this.getRevision(familyId) + 1);
             }
             this.db.run('UPDATE family_invites SET used_at = ? WHERE token = ?', [Date.now(), token]);
-            this.db.run('COMMIT');
-            this.persist();
             return this.exportEnvelope(user);
-        } catch (error) {
-            this.db.run('ROLLBACK');
-            throw error;
-        }
+        });
     }
 
     getCachedAiUsage(familyId: string, helperType: AiHelperType, inputHash: string): AiUsage | undefined {
@@ -359,28 +550,29 @@ export class FamTrackDatabase {
             createdAt: usage.createdAt || Date.now(),
             ...usage
         };
-        this.db.run(
-            `INSERT INTO ai_usage (
-                id, family_id, actor_id, helper_type, input_hash, model, input_chars,
-                output_tokens, estimated_cost, cached, response_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                row.id,
-                row.familyId,
-                row.actorId,
-                row.helperType,
-                row.inputHash,
-                row.model,
-                row.inputChars,
-                row.outputTokens,
-                row.estimatedCost,
-                boolToInt(row.cached),
-                row.responseJson,
-                row.createdAt
-            ]
-        );
-        this.persist();
-        return row;
+        return this.persistedTransaction(() => {
+            this.db.run(
+                `INSERT INTO ai_usage (
+                    id, family_id, actor_id, helper_type, input_hash, model, input_chars,
+                    output_tokens, estimated_cost, cached, response_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    row.id,
+                    row.familyId,
+                    row.actorId,
+                    row.helperType,
+                    row.inputHash,
+                    row.model,
+                    row.inputChars,
+                    row.outputTokens,
+                    row.estimatedCost,
+                    boolToInt(row.cached),
+                    row.responseJson,
+                    row.createdAt
+                ]
+            );
+            return row;
+        });
     }
 
     close() {
@@ -392,6 +584,20 @@ export class FamTrackDatabase {
         this.ensureLegacyFamilyIds();
         this.ensureBudgetsSchema();
         this.addColumnIfMissing('tasks', 'sort_order', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'difficulty', "TEXT NOT NULL DEFAULT 'MEDIUM'");
+        this.db.run("UPDATE tasks SET difficulty = 'MEDIUM' WHERE difficulty NOT IN ('EASY', 'MEDIUM', 'HARD')");
+        this.addColumnIfMissing('families', 'settings_json', 'TEXT');
+        this.addColumnIfMissing('users', 'telegram_first_name', 'TEXT');
+        this.addColumnIfMissing('users', 'telegram_last_name', 'TEXT');
+        this.addColumnIfMissing('users', 'avatar_url', 'TEXT');
+        this.addColumnIfMissing('tasks', 'notification_mode', "TEXT NOT NULL DEFAULT 'INHERIT'");
+        this.addColumnIfMissing('tasks', 'completed_at', 'INTEGER');
+        this.addColumnIfMissing('tasks', 'completed_by_id', 'TEXT');
+        this.addColumnIfMissing('tasks', 'rewarded_at', 'INTEGER');
+        this.addColumnIfMissing('rewards', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+        this.addColumnIfMissing('rewards', 'created_by_id', 'TEXT');
+        this.addColumnIfMissing('rewards', 'updated_at', 'INTEGER');
+        this.db.run('UPDATE families SET settings_json = ? WHERE settings_json IS NULL OR settings_json = ?', [json(DEFAULT_FAMILY_SETTINGS), '']);
         this.db.run("UPDATE users SET is_active = 0 WHERE id = 'u4' AND name = 'Дочь' AND role = 'CHILD' AND telegram_id IS NULL");
         this.removeLegacyDemoPlaystationSavingsGoal();
         this.db.run(
@@ -415,7 +621,8 @@ export class FamTrackDatabase {
                 name TEXT NOT NULL,
                 owner_user_id TEXT,
                 revision INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                settings_json TEXT
             );
             CREATE TABLE IF NOT EXISTS family_invites (
                 token TEXT PRIMARY KEY,
@@ -427,6 +634,18 @@ export class FamTrackDatabase {
                 expires_at INTEGER,
                 used_at INTEGER
             );
+            CREATE TABLE IF NOT EXISTS mutation_receipts (
+                family_id TEXT NOT NULL,
+                mutation_id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (family_id, mutation_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_mutation_receipts_created_at
+                ON mutation_receipts(created_at);
             CREATE TABLE IF NOT EXISTS ai_usage (
                 id TEXT PRIMARY KEY,
                 family_id TEXT NOT NULL,
@@ -452,6 +671,9 @@ export class FamTrackDatabase {
                 is_active INTEGER NOT NULL DEFAULT 1,
                 telegram_id INTEGER,
                 telegram_username TEXT,
+                telegram_first_name TEXT,
+                telegram_last_name TEXT,
+                avatar_url TEXT,
                 streak INTEGER NOT NULL,
                 last_login_date TEXT
             );
@@ -473,6 +695,7 @@ export class FamTrackDatabase {
                 description TEXT,
                 status TEXT NOT NULL,
                 priority TEXT NOT NULL,
+                difficulty TEXT NOT NULL DEFAULT 'MEDIUM',
                 points INTEGER NOT NULL,
                 assignee_id TEXT,
                 created_by_id TEXT NOT NULL,
@@ -484,7 +707,11 @@ export class FamTrackDatabase {
                 reminder_time TEXT,
                 visible_to_json TEXT,
                 is_recurring INTEGER NOT NULL,
-                frequency TEXT
+                frequency TEXT,
+                notification_mode TEXT NOT NULL DEFAULT 'INHERIT',
+                completed_at INTEGER,
+                completed_by_id TEXT,
+                rewarded_at INTEGER
             );
             CREATE TABLE IF NOT EXISTS accounts (
                 family_id TEXT NOT NULL,
@@ -568,7 +795,10 @@ export class FamTrackDatabase {
                 title TEXT NOT NULL,
                 cost INTEGER NOT NULL,
                 icon TEXT NOT NULL,
-                description TEXT
+                description TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by_id TEXT,
+                updated_at INTEGER
             );
             CREATE TABLE IF NOT EXISTS reward_logs (
                 family_id TEXT NOT NULL,
@@ -730,13 +960,16 @@ export class FamTrackDatabase {
 
     private seedIfEmpty() {
         if (Number(this.selectValue('SELECT COUNT(*) FROM users WHERE family_id = ?', [DEFAULT_FAMILY_ID]) || 0) > 0) return;
-        const seed = cloneInitialData();
+        const seed = process.env.NODE_ENV === 'production' && process.env.FAMTRACK_BOOTSTRAP_DEMO !== '1'
+            ? createProductionBootstrapData()
+            : cloneInitialData();
         this.insertFamily({
             id: DEFAULT_FAMILY_ID,
-            name: DEFAULT_FAMILY_NAME,
+            name: seed.family?.name || DEFAULT_FAMILY_NAME,
             ownerUserId: seed.currentUser.id,
             createdAt: Date.now(),
-            revision: 1
+            revision: 1,
+            settings: { ...DEFAULT_FAMILY_SETTINGS }
         });
         this.replaceFamilyData(DEFAULT_FAMILY_ID, seed);
         this.setFamilyRevision(DEFAULT_FAMILY_ID, 1);
@@ -756,6 +989,12 @@ export class FamTrackDatabase {
         const missingTaskOrder = Number(this.selectValue('SELECT COUNT(*) FROM tasks WHERE sort_order IS NULL') || 0);
         if (missingTaskOrder > 0) {
             throw new Error('Migration validation failed: tasks without sort_order');
+        }
+        const invalidTaskDifficulty = Number(this.selectValue(
+            "SELECT COUNT(*) FROM tasks WHERE difficulty NOT IN ('EASY', 'MEDIUM', 'HARD')"
+        ) || 0);
+        if (invalidTaskDifficulty > 0) {
+            throw new Error('Migration validation failed: tasks with invalid difficulty');
         }
         const migrationRecorded = Number(this.selectValue('SELECT COUNT(*) FROM schema_migrations WHERE version = ?', [MIGRATION_VERSION]) || 0);
         if (migrationRecorded <= 0) {
@@ -803,9 +1042,16 @@ export class FamTrackDatabase {
         this.insertEvents(familyId, data.events || []);
 
         const owner = members.find(member => member.isActive !== false && member.role === 'OWNER') || members[0];
+        const family = data.family;
         this.db.run(
-            'UPDATE families SET owner_user_id = COALESCE(owner_user_id, ?) WHERE id = ?',
-            [owner?.id || data.currentUser?.id || '', familyId]
+            `UPDATE families SET name = COALESCE(?, name), owner_user_id = COALESCE(?, owner_user_id),
+             settings_json = ? WHERE id = ?`,
+            [
+                nullable(family?.name),
+                family?.ownerUserId || owner?.id || data.currentUser?.id || '',
+                json(normalizeFamilySettings(family?.settings || DEFAULT_FAMILY_SETTINGS)),
+                familyId
+            ]
         );
     }
 
@@ -827,9 +1073,16 @@ export class FamTrackDatabase {
 
     private insertFamily(family: Family) {
         this.db.run(
-            `INSERT OR REPLACE INTO families (id, name, owner_user_id, revision, created_at)
-             VALUES (?, ?, ?, ?, ?)`,
-            [family.id, family.name, nullable(family.ownerUserId), family.revision, family.createdAt]
+            `INSERT OR REPLACE INTO families (id, name, owner_user_id, revision, created_at, settings_json)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [
+                family.id,
+                family.name,
+                nullable(family.ownerUserId),
+                family.revision,
+                family.createdAt,
+                json(normalizeFamilySettings(family.settings))
+            ]
         );
     }
 
@@ -837,8 +1090,9 @@ export class FamTrackDatabase {
         const stmt = this.db.prepare(`
             INSERT OR REPLACE INTO users (
                 family_id, id, name, role, avatar, xp, level, is_active,
-                telegram_id, telegram_username, streak, last_login_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                telegram_id, telegram_username, telegram_first_name, telegram_last_name,
+                avatar_url, streak, last_login_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         try {
             for (const user of users) {
@@ -853,6 +1107,9 @@ export class FamTrackDatabase {
                     activeToInt(user.isActive),
                     nullable(user.telegramId),
                     nullable(user.telegramUsername),
+                    nullable(user.telegramFirstName),
+                    nullable(user.telegramLastName),
+                    nullable(normalizeAvatarUrl(user.avatarUrl)),
                     user.streak || 0,
                     nullable(user.lastLoginDate)
                 ]);
@@ -890,10 +1147,11 @@ export class FamTrackDatabase {
     private insertTasks(familyId: string, tasks: Task[]) {
         const stmt = this.db.prepare(`
             INSERT OR REPLACE INTO tasks (
-                family_id, id, title, description, status, priority, points, assignee_id,
+                family_id, id, title, description, status, priority, difficulty, points, assignee_id,
                 created_by_id, epic_id, subtasks_json, created_at, sort_order, due_date,
-                reminder_time, visible_to_json, is_recurring, frequency
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reminder_time, visible_to_json, is_recurring, frequency, notification_mode,
+                completed_at, completed_by_id, rewarded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         try {
             tasks.forEach((task, index) => {
@@ -904,6 +1162,7 @@ export class FamTrackDatabase {
                     nullable(task.description),
                     task.status,
                     task.priority,
+                    task.difficulty || 'MEDIUM',
                     task.points,
                     nullable(task.assigneeId),
                     task.createdById,
@@ -915,7 +1174,11 @@ export class FamTrackDatabase {
                     nullable(task.reminderTime),
                     json(task.visibleTo),
                     boolToInt(task.isRecurring),
-                    nullable(task.frequency)
+                    nullable(task.frequency),
+                    task.notificationMode || 'INHERIT',
+                    nullable(task.completedAt),
+                    nullable(task.completedById),
+                    nullable(task.rewardedAt)
                 ]);
             });
         } finally {
@@ -1094,8 +1357,9 @@ export class FamTrackDatabase {
 
     private insertRewards(familyId: string, rewards: Reward[]) {
         const stmt = this.db.prepare(`
-            INSERT OR REPLACE INTO rewards (family_id, id, title, cost, icon, description)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO rewards (
+                family_id, id, title, cost, icon, description, is_active, created_by_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         try {
             for (const reward of rewards) {
@@ -1105,7 +1369,10 @@ export class FamTrackDatabase {
                     reward.title,
                     reward.cost,
                     reward.icon,
-                    nullable(reward.description)
+                    nullable(reward.description),
+                    activeToInt(reward.isActive),
+                    nullable(reward.createdById),
+                    nullable(reward.updatedAt)
                 ]);
             }
         } finally {
@@ -1234,12 +1501,53 @@ export class FamTrackDatabase {
     }
 
     private markInviteUsed(token: string) {
-        this.db.run('UPDATE family_invites SET used_at = ? WHERE token = ?', [Date.now(), token]);
-        this.persist();
+        this.persistedTransaction(() => {
+            this.db.run('UPDATE family_invites SET used_at = ? WHERE token = ?', [Date.now(), token]);
+        });
     }
 
     private setFamilyRevision(familyId: string, revision: number) {
         this.db.run('UPDATE families SET revision = ? WHERE id = ?', [revision, familyId]);
+    }
+
+    private assertMatchingReceipt(
+        row: Row,
+        receipt: { actorId: string; operation: string; requestHash: string }
+    ) {
+        if (String(row.actor_id) !== receipt.actorId
+            || String(row.operation) !== receipt.operation
+            || String(row.request_hash) !== receipt.requestHash) {
+            throw new MutationIdConflictError('Mutation id was already used for a different command');
+        }
+    }
+
+    private persistedTransaction<T>(operation: () => T): T {
+        const before = this.db.export();
+        let committed = false;
+        this.db.run('BEGIN IMMEDIATE');
+        try {
+            const result = operation();
+            this.db.run('COMMIT');
+            committed = true;
+            try {
+                this.persist();
+            } catch (error) {
+                const restored = new this.SQL.Database(before);
+                this.db.close();
+                this.db = restored;
+                throw error;
+            }
+            return result;
+        } catch (error) {
+            if (!committed) {
+                try {
+                    this.db.run('ROLLBACK');
+                } catch {
+                    // Preserve the original domain/SQLite error.
+                }
+            }
+            throw error;
+        }
     }
 
     private resolveFamilyId(familyOrActor?: string | User) {
@@ -1284,7 +1592,35 @@ export class FamTrackDatabase {
     }
 
     private persist() {
-        fs.writeFileSync(this.dbPath, Buffer.from(this.db.export()));
+        const buffer = Buffer.from(this.db.export());
+        const directory = path.dirname(this.dbPath);
+        const temporaryPath = path.join(
+            directory,
+            `.${path.basename(this.dbPath)}.${process.pid}.${randomUUID()}.tmp`
+        );
+        let fd: number | undefined;
+        try {
+            fd = fs.openSync(temporaryPath, 'w', 0o600);
+            fs.writeFileSync(fd, buffer);
+            fs.fsyncSync(fd);
+            fs.closeSync(fd);
+            fd = undefined;
+            fs.renameSync(temporaryPath, this.dbPath);
+            try {
+                const directoryFd = fs.openSync(directory, 'r');
+                try {
+                    fs.fsyncSync(directoryFd);
+                } finally {
+                    fs.closeSync(directoryFd);
+                }
+            } catch {
+                // Some filesystems do not support fsync on directories.
+            }
+        } catch (error) {
+            if (fd !== undefined) fs.closeSync(fd);
+            if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+            throw error;
+        }
     }
 
     private tableInfo(table: string) {
@@ -1308,7 +1644,8 @@ const createNewFamilyData = (familyId: string, owner: User, familyName?: string)
             name: familyName || `${owner.name}'s family`,
             ownerUserId: owner.id,
             createdAt: Date.now(),
-            revision: 1
+            revision: 1,
+            settings: { ...DEFAULT_FAMILY_SETTINGS }
         },
         currentUser: owner,
         members: [owner],
@@ -1330,12 +1667,76 @@ const createNewFamilyData = (familyId: string, owner: User, familyName?: string)
     };
 };
 
+const createProductionBootstrapData = (): AppData => {
+    const ownerTelegramId = firstNumber(
+        process.env.FAMTRACK_OWNER_TELEGRAM_IDS || process.env.FAMTRACK_ALLOWED_TELEGRAM_IDS
+    );
+    const ownerUsername = firstValue(process.env.FAMTRACK_ALLOWED_TELEGRAM_USERNAMES)?.replace(/^@/, '');
+    if (!ownerTelegramId && !ownerUsername) {
+        throw new Error(
+            'Fresh production database requires FAMTRACK_OWNER_TELEGRAM_IDS, '
+            + 'FAMTRACK_ALLOWED_TELEGRAM_IDS or FAMTRACK_ALLOWED_TELEGRAM_USERNAMES'
+        );
+    }
+    const owner: User = {
+        id: `u-bootstrap-${randomUUID()}`,
+        familyId: DEFAULT_FAMILY_ID,
+        name: ownerUsername || 'Владелец',
+        role: 'OWNER',
+        avatar: '🙂',
+        xp: 0,
+        level: 1,
+        isActive: true,
+        telegramId: ownerTelegramId,
+        telegramUsername: ownerUsername,
+        streak: 0
+    };
+    return {
+        family: {
+            id: DEFAULT_FAMILY_ID,
+            name: process.env.FAMTRACK_BOOTSTRAP_FAMILY_NAME?.trim() || 'Моя семья',
+            ownerUserId: owner.id,
+            createdAt: Date.now(),
+            revision: 1,
+            settings: { ...DEFAULT_FAMILY_SETTINGS }
+        },
+        currentUser: owner,
+        members: [owner],
+        epics: [],
+        tasks: [],
+        accounts: [],
+        goals: [],
+        savingsGoals: [],
+        contributions: [],
+        subscriptions: [],
+        budgets: [],
+        transactions: [],
+        rewards: [],
+        rewardLogs: [],
+        inventory: [],
+        shoppingList: [],
+        notes: [],
+        events: []
+    };
+};
+
+const firstValue = (value: string | undefined) => value
+    ?.split(',')
+    .map(item => item.trim())
+    .find(Boolean);
+
+const firstNumber = (value: string | undefined) => {
+    const parsed = Number(firstValue(value));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
 const rowToFamily = (row: Row): Family => ({
     id: String(row.id),
     name: String(row.name),
     ownerUserId: row.owner_user_id == null ? undefined : String(row.owner_user_id),
     revision: toNumber(row.revision),
-    createdAt: toNumber(row.created_at)
+    createdAt: toNumber(row.created_at),
+    settings: normalizeFamilySettings(parseJson(row.settings_json, DEFAULT_FAMILY_SETTINGS))
 });
 
 const rowToFamilyInvite = (row: Row): FamilyInvite => ({
@@ -1375,6 +1776,9 @@ const rowToUser = (row: Row): User => ({
     isActive: row.is_active == null ? true : intToBool(row.is_active),
     telegramId: row.telegram_id == null ? undefined : toNumber(row.telegram_id),
     telegramUsername: row.telegram_username == null ? undefined : String(row.telegram_username),
+    telegramFirstName: row.telegram_first_name == null ? undefined : String(row.telegram_first_name),
+    telegramLastName: row.telegram_last_name == null ? undefined : String(row.telegram_last_name),
+    avatarUrl: normalizeAvatarUrl(row.avatar_url),
     streak: toNumber(row.streak),
     lastLoginDate: row.last_login_date == null ? undefined : String(row.last_login_date)
 });
@@ -1396,6 +1800,7 @@ const rowToTask = (row: Row): Task => ({
     description: row.description == null ? undefined : String(row.description),
     status: row.status as Task['status'],
     priority: row.priority as Task['priority'],
+    difficulty: row.difficulty == null ? 'MEDIUM' : row.difficulty as Task['difficulty'],
     points: toNumber(row.points),
     assigneeId: row.assignee_id == null ? undefined : String(row.assignee_id),
     createdById: String(row.created_by_id),
@@ -1407,7 +1812,11 @@ const rowToTask = (row: Row): Task => ({
     reminderTime: row.reminder_time == null ? undefined : String(row.reminder_time),
     visibleTo: parseJson<string[] | undefined>(row.visible_to_json, undefined),
     isRecurring: intToBool(row.is_recurring),
-    frequency: row.frequency == null ? undefined : row.frequency as Task['frequency']
+    frequency: row.frequency == null ? undefined : row.frequency as Task['frequency'],
+    notificationMode: row.notification_mode == null ? 'INHERIT' : row.notification_mode as Task['notificationMode'],
+    completedAt: row.completed_at == null ? undefined : toNumber(row.completed_at),
+    completedById: row.completed_by_id == null ? undefined : String(row.completed_by_id),
+    rewardedAt: row.rewarded_at == null ? undefined : toNumber(row.rewarded_at)
 });
 
 const rowToAccount = (row: Row): Account => ({
@@ -1490,7 +1899,10 @@ const rowToReward = (row: Row): Reward => ({
     title: String(row.title),
     cost: toNumber(row.cost),
     icon: String(row.icon),
-    description: row.description == null ? undefined : String(row.description)
+    description: row.description == null ? undefined : String(row.description),
+    isActive: row.is_active == null ? true : intToBool(row.is_active),
+    createdById: row.created_by_id == null ? undefined : String(row.created_by_id),
+    updatedAt: row.updated_at == null ? undefined : toNumber(row.updated_at)
 });
 
 const rowToRewardLog = (row: Row): RewardLog => ({

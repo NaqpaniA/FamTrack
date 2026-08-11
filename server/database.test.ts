@@ -4,7 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { FamTrackDatabase, RevisionConflictError } from './database.js';
+import {
+    FamTrackDatabase,
+    MutationIdConflictError,
+    RevisionConflictError,
+    RevisionRequiredError
+} from './database.js';
 import { AuthError, validateRequestAuth } from './auth.js';
 import { ForbiddenError, assertCanWrite, filterForActor, sanitizeBatchUpdates } from './rbac.js';
 
@@ -41,6 +46,7 @@ test('database migrations are idempotent and seed initial data', async () => {
     const first = await FamTrackDatabase.open(dbPath);
     assert.equal(first.getRevision(), 1);
     assert.ok(first.getAppData().members.length > 0);
+    assert.equal(first.integrityReport().ok, true);
     assert.ok(!first.getAppData().members.some(member => member.id === 'u4' && member.isActive !== false));
     assert.ok(!first.getAppData().savingsGoals.some(goal => goal.title === 'Sony PlayStation 5'));
     first.close();
@@ -50,6 +56,33 @@ test('database migrations are idempotent and seed initial data', async () => {
     assert.ok(second.getAppData().tasks.length > 0);
     assert.ok(!second.getAppData().savingsGoals.some(goal => goal.title === 'Sony PlayStation 5'));
     second.close();
+});
+
+test('fresh production database bootstraps a clean owner workspace without demo data', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousOwnerIds = process.env.FAMTRACK_OWNER_TELEGRAM_IDS;
+    const previousDemo = process.env.FAMTRACK_BOOTSTRAP_DEMO;
+    process.env.NODE_ENV = 'production';
+    process.env.FAMTRACK_OWNER_TELEGRAM_IDS = '424242';
+    process.env.FAMTRACK_BOOTSTRAP_DEMO = '0';
+    try {
+        const db = await FamTrackDatabase.open(tempDbPath());
+        const data = db.getAppData();
+        assert.equal(data.currentUser.telegramId, 424242);
+        assert.equal(data.currentUser.role, 'OWNER');
+        assert.equal(data.tasks.length, 0);
+        assert.equal(data.accounts.length, 0);
+        assert.equal(data.transactions.length, 0);
+        assert.equal(data.rewards.length, 0);
+        db.close();
+    } finally {
+        if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = previousNodeEnv;
+        if (previousOwnerIds === undefined) delete process.env.FAMTRACK_OWNER_TELEGRAM_IDS;
+        else process.env.FAMTRACK_OWNER_TELEGRAM_IDS = previousOwnerIds;
+        if (previousDemo === undefined) delete process.env.FAMTRACK_BOOTSTRAP_DEMO;
+        else process.env.FAMTRACK_BOOTSTRAP_DEMO = previousDemo;
+    }
 });
 
 test('legacy seed daughter is archived without deleting history', async () => {
@@ -78,6 +111,208 @@ test('stale revisions are rejected', async () => {
         RevisionConflictError
     );
     db.close();
+});
+
+test('mutations without a loaded revision are rejected without changing data', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const before = db.exportEnvelope();
+
+    assert.throws(
+        () => db.mutate(null, data => ({ ...data, tasks: [] })),
+        RevisionRequiredError
+    );
+    assert.equal(db.getRevision(), before.revision);
+    assert.deepEqual(db.getAppData().tasks, before.data.tasks);
+    db.close();
+});
+
+test('commands from two clients at the same base revision are rebased without losing either change', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const before = db.exportEnvelope();
+    const familyId = before.data.family!.id;
+    const actor = before.data.currentUser;
+    const addItem = (id: string, title: string) => (data: typeof before.data) => ({
+        ...data,
+        shoppingList: [{
+            id,
+            title,
+            category: 'FOOD' as const,
+            addedById: actor.id,
+            isCompleted: false,
+            createdAt: 100
+        }, ...data.shoppingList]
+    });
+
+    const first = db.mutateCommand(familyId, before.revision, {
+        mutationId: 'mutation-client-one',
+        actorId: actor.id,
+        operation: '/api/shopping/items/add',
+        requestHash: 'hash-one'
+    }, addItem('concurrent-one', 'Milk'), actor);
+    const second = db.mutateCommand(familyId, before.revision, {
+        mutationId: 'mutation-client-two',
+        actorId: actor.id,
+        operation: '/api/shopping/items/add',
+        requestHash: 'hash-two'
+    }, addItem('concurrent-two', 'Bread'), actor);
+
+    assert.equal(first.command.rebased, false);
+    assert.equal(second.command.rebased, true);
+    assert.equal(second.revision, before.revision + 2);
+    assert.ok(db.getAppData().shoppingList.some(item => item.id === 'concurrent-one'));
+    assert.ok(db.getAppData().shoppingList.some(item => item.id === 'concurrent-two'));
+    db.close();
+});
+
+test('commands with a future revision are rejected without changing data', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const before = db.exportEnvelope();
+    const familyId = before.data.family!.id;
+    const actor = before.data.currentUser;
+    let applications = 0;
+
+    assert.throws(
+        () => db.mutateCommand(familyId, before.revision + 1, {
+            mutationId: 'mutation-future-revision',
+            actorId: actor.id,
+            operation: '/api/tasks/save',
+            requestHash: 'future-payload'
+        }, data => {
+            applications += 1;
+            return { ...data, tasks: [] };
+        }, actor),
+        RevisionConflictError
+    );
+    assert.equal(applications, 0);
+    assert.equal(db.getRevision(), before.revision);
+    assert.deepEqual(db.getAppData().tasks, before.data.tasks);
+    db.close();
+});
+
+test('repeating the same command is idempotent and a reused mutation id is rejected', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const before = db.exportEnvelope();
+    const familyId = before.data.family!.id;
+    const actor = before.data.currentUser;
+    const receipt = {
+        mutationId: 'mutation-retry',
+        actorId: actor.id,
+        operation: '/api/rewards/purchase',
+        requestHash: 'same-payload'
+    };
+    let applications = 0;
+    const applyOnce = (data: typeof before.data) => {
+        applications += 1;
+        return { ...data, budgets: [{ categoryId: 'retry-proof', limit: 123 }, ...data.budgets] };
+    };
+
+    const first = db.mutateCommand(familyId, before.revision, receipt, applyOnce, actor);
+    const repeated = db.mutateCommand(familyId, before.revision, receipt, applyOnce, actor);
+
+    assert.equal(applications, 1);
+    assert.equal(repeated.revision, first.revision);
+    assert.equal(repeated.command.duplicate, true);
+    assert.equal(db.getAppData().budgets.filter(item => item.categoryId === 'retry-proof').length, 1);
+    assert.throws(
+        () => db.mutateCommand(familyId, repeated.revision, {
+            ...receipt,
+            requestHash: 'different-payload'
+        }, applyOnce, actor),
+        MutationIdConflictError
+    );
+    db.close();
+});
+
+test('a disk persistence failure restores the in-memory database to the last durable state', async () => {
+    const dbPath = tempDbPath();
+    const db = await FamTrackDatabase.open(dbPath);
+    const before = db.exportEnvelope();
+    const internals = db as unknown as { persist: () => void };
+    const persist = internals.persist.bind(db);
+    internals.persist = () => {
+        throw new Error('simulated fsync failure');
+    };
+
+    assert.throws(
+        () => db.mutate(before.revision, data => ({ ...data, shoppingList: [] })),
+        /simulated fsync failure/
+    );
+    assert.equal(db.getRevision(), before.revision);
+    assert.deepEqual(db.getAppData().shoppingList, before.data.shoppingList);
+
+    internals.persist = persist;
+    db.close();
+    const reopened = await FamTrackDatabase.open(dbPath);
+    assert.equal(reopened.getRevision(), before.revision);
+    assert.deepEqual(reopened.getAppData().shoppingList, before.data.shoppingList);
+    reopened.close();
+});
+
+test('reopening a migrated database preserves existing task points', async () => {
+    const dbPath = tempDbPath();
+    const db = await FamTrackDatabase.open(dbPath);
+    const before = db.exportEnvelope();
+    const taskId = before.data.tasks[0].id;
+    db.mutate(before.revision, data => ({
+        ...data,
+        tasks: data.tasks.map(task => task.id === taskId ? { ...task, points: 77 } : task)
+    }));
+    const internals = db as unknown as {
+        db: { run: (sql: string, params?: unknown[]) => void };
+        persist: () => void;
+    };
+    internals.db.run("UPDATE tasks SET difficulty = 'BROKEN' WHERE id = ?", [taskId]);
+    internals.persist();
+    db.close();
+
+    const reopened = await FamTrackDatabase.open(dbPath);
+    const task = reopened.getAppData().tasks.find(item => item.id === taskId);
+    assert.equal(task?.points, 77);
+    assert.equal(task?.difficulty, 'MEDIUM');
+    reopened.close();
+});
+
+test('timestamped backup restores the same revision and control record', async () => {
+    const dbPath = tempDbPath();
+    const db = await FamTrackDatabase.open(dbPath);
+    const before = db.exportEnvelope();
+    const template = before.data.tasks[0];
+    assert.ok(template);
+    const controlTask = {
+        ...template,
+        id: 'backup-restore-control-task',
+        title: 'Backup restore control record',
+        status: 'TODO' as const,
+        createdAt: Date.now()
+    };
+    const mutation = db.mutate(before.revision, data => ({
+        ...data,
+        tasks: [controlTask, ...data.tasks]
+    }));
+    const expectedRevision = mutation.revision;
+    db.close();
+
+    const reopened = await FamTrackDatabase.open(dbPath);
+    assert.equal(reopened.getRevision(), expectedRevision);
+    reopened.close();
+
+    const directory = path.dirname(dbPath);
+    const prefix = `${path.basename(dbPath)}.backup-`;
+    const backup = fs.readdirSync(directory)
+        .filter(name => name.startsWith(prefix))
+        .sort()
+        .at(-1);
+    assert.ok(backup, 'opening an existing database must create a timestamped backup');
+
+    const restoredPath = path.join(directory, 'restored.sqlite');
+    fs.copyFileSync(path.join(directory, backup), restoredPath);
+    const restored = await FamTrackDatabase.open(restoredPath);
+    assert.equal(restored.getRevision(), expectedRevision);
+    assert.equal(
+        restored.getAppData().tasks.find(task => task.id === controlTask.id)?.title,
+        controlTask.title
+    );
+    restored.close();
 });
 
 test('finance mutations persist transactionally', async () => {
@@ -251,6 +486,43 @@ test('telegram allowlist accepts known users', () => {
 
     assert.equal(auth.telegramId, 20);
     assert.equal(auth.username, 'dad');
+});
+
+test('telegram initData rejects timestamps too far in the future', () => {
+    const futureAuthDate = Math.floor(Date.now() / 1000) + 31;
+    const initData = signInitData('secret-token', { id: 20, username: 'dad' }, futureAuthDate);
+
+    assert.throws(
+        () => validateRequestAuth(initData, {
+            mode: 'telegram',
+            botToken: 'secret-token',
+            allowedTelegramIds: new Set(),
+            allowedTelegramUsernames: new Set(),
+            initDataMaxAgeSeconds: 86400
+        }),
+        AuthError
+    );
+});
+
+test('telegram profile sync persists names and a safe HTTPS avatar URL', async () => {
+    const db = await FamTrackDatabase.open(tempDbPath());
+    const owner = db.getAppData().members[0];
+    const changed = db.syncTelegramProfile({
+        telegramId: 777,
+        username: owner.telegramUsername?.toLowerCase(),
+        firstName: 'Иван',
+        lastName: 'Петров',
+        photoUrl: 'https://cdn.example.test/avatar.jpg'
+    });
+    assert.equal(changed, true);
+    const synced = db.resolveActor({ telegramId: 777 });
+    assert.equal(synced?.telegramFirstName, 'Иван');
+    assert.equal(synced?.telegramLastName, 'Петров');
+    assert.equal(synced?.avatarUrl, 'https://cdn.example.test/avatar.jpg');
+
+    db.syncTelegramProfile({ telegramId: 777, photoUrl: 'javascript:alert(1)' });
+    assert.equal(db.resolveActor({ telegramId: 777 })?.avatarUrl, 'https://cdn.example.test/avatar.jpg');
+    db.close();
 });
 
 test('owner sees private family data and admin does not', async () => {
@@ -488,6 +760,7 @@ test('family invite creates isolated second family and cannot join a second fami
             title: 'Parents only',
             status: 'TODO',
             priority: 'LOW',
+            difficulty: 'EASY',
             points: 10,
             assigneeId: parent.id,
             createdById: parent.id,
@@ -512,9 +785,9 @@ test('family invite creates isolated second family and cannot join a second fami
     db.close();
 });
 
-function signInitData(botToken: string, user: Record<string, unknown>) {
+function signInitData(botToken: string, user: Record<string, unknown>, authDate = 1710000000) {
     const params = new URLSearchParams({
-        auth_date: '1710000000',
+        auth_date: String(authDate),
         query_id: 'test-query',
         user: JSON.stringify(user)
     });

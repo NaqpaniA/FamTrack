@@ -1,16 +1,36 @@
 import http, { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { DEFAULT_FAMILY_ID, FamTrackDatabase, RevisionConflictError, normalizeAiInputHash } from './database.js';
 import { AuthError, getAuthConfig, validateRequestAuth, type AuthContext } from './auth.js';
-import { ForbiddenError, assertCanWrite, filterForActor, sanitizeBatchUpdates, isOwner } from './rbac.js';
+import { ForbiddenError, assertCanWrite, filterForActor, sanitizeBatchUpdates, isAdmin, isOwner } from './rbac.js';
+import { familyInviteUrl, telegramMiniAppInviteUrl } from './links.js';
+import { TelegramAvatarService } from './telegram-avatar.js';
 import type { AiHelperType, AppData, RequestContext } from '../types.js';
 import type { Role, User } from '../family.model.js';
 import type { TaskStatus } from '../tasks.model.js';
 import type { Note, NoteChecklistItem, NoteContentType, NoteScope } from '../notes.model.js';
+import {
+    addShoppingItem,
+    archiveReward,
+    checkInFamilyMember,
+    checkoutShoppingItems,
+    changeTaskStatus,
+    contributeToSavingsGoal,
+    normalizeEpicForSave,
+    normalizeRewardForSave,
+    normalizeTaskForSave,
+    paySubscription,
+    purchaseReward,
+    reminderCandidates,
+    saveFinancialTransaction,
+    setShoppingItemCompleted,
+    updateFamilySettings,
+    useReward
+} from './domain.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT || 8080);
@@ -20,6 +40,7 @@ const staticDir = process.env.FAMTRACK_STATIC_DIR || path.resolve(__dirname, '..
 const authConfig = getAuthConfig();
 const aiConfig = getAiConfig();
 const metrics = createMetricsStore();
+const telegramAvatarService = new TelegramAvatarService({ botToken: authConfig.botToken });
 
 const mimeTypes: Record<string, string> = {
     '.html': 'text/html; charset=utf-8',
@@ -52,7 +73,12 @@ const db = await FamTrackDatabase.open(dbPath);
 
 const server = http.createServer(async (req, res) => {
     const started = performance.now();
+    const requestId = randomUUID();
     let pathname = '/unknown';
+    res.setHeader('X-Request-Id', requestId);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     res.on('finish', () => {
         metrics.record(req.method || 'UNKNOWN', pathname, res.statusCode, performance.now() - started);
     });
@@ -60,12 +86,29 @@ const server = http.createServer(async (req, res) => {
         const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
         pathname = url.pathname;
         if (url.pathname.startsWith('/api/')) {
+            res.setHeader('Cache-Control', 'no-store');
             await handleApi(req, res, url.pathname);
+            return;
+        }
+        const legacyInviteToken = url.searchParams.get('invite')?.trim();
+        const miniAppInviteUrl = legacyInviteToken
+            ? telegramMiniAppInviteUrl(legacyInviteToken)
+            : undefined;
+        if (req.method === 'GET' && miniAppInviteUrl) {
+            res.writeHead(302, {
+                Location: miniAppInviteUrl,
+                'Cache-Control': 'no-store'
+            });
+            res.end();
             return;
         }
         await serveStatic(res, url.pathname);
     } catch (error) {
-        handleError(res, error);
+        handleError(res, error, {
+            requestId,
+            method: req.method || 'UNKNOWN',
+            pathname
+        });
     }
 });
 
@@ -115,6 +158,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/internal/reminders/due') {
+        if (!auth.isInternal) throw new AuthError('Internal reminders require internal auth');
+        const now = Date.now();
+        const candidates = db.listFamilyIds().flatMap(familyId => reminderCandidates(db.getAppData(familyId), now));
+        sendJson(res, 200, { now, candidates });
+        return;
+    }
+
     if (req.method === 'POST' && pathname === '/api/family/invites/accept') {
         const body = await readJsonBody(req);
         const token = normalizeString(body.token, '', 180);
@@ -129,6 +180,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
     }
 
     const context = resolveRequestContext(auth, req);
+
+    if (req.method === 'GET' && pathname.match(/^\/api\/users\/[^/]+\/avatar$/)) {
+        return sendTelegramAvatar(res, pathname, context);
+    }
 
     if (req.method === 'GET' && pathname === '/api/app-data') {
         sendJson(res, 200, exportForActor(context));
@@ -148,87 +203,138 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
         case '/api/family/invites':
             return sendJson(res, 200, createInvite(req, context, body));
         case '/api/tasks/reorder':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => reorderTasks(data, body.tasks));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => reorderTasks(data, body.tasks));
+        case '/api/tasks/status':
+            return sendCommand(res, revision, context, pathname, body, data => changeTaskStatus(data, {
+                taskId: normalizeString(body.taskId || body.id, '', 120),
+                status: body.status as TaskStatus,
+                beforeTaskId: normalizeOptionalString(body.beforeTaskId, 120)
+            }, context.actor));
         case '/api/ai/task-breakdown':
             return sendJson(res, 200, handleAiTaskBreakdown(context, body));
         case '/api/ai/expense-analysis':
             return sendJson(res, 200, handleAiExpenseAnalysis(context, filterForActor(currentData(), context.actor), body));
         case '/api/notes/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => saveNote(data, body.note, context.actor));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => saveNote(data, body.note, context.actor));
         case '/api/notes/delete':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => ({
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
                 ...data,
                 notes: data.notes.filter(note => note.id !== body.id)
             }));
         case '/api/tasks/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'tasks', body.task));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => upsertById(
+                data,
+                'tasks',
+                normalizeTaskForSave(data, body.task, context.actor)
+            ));
         case '/api/tasks/delete':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => ({
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
                 ...data,
                 tasks: data.tasks.filter(task => task.id !== body.id)
             }));
         case '/api/epics/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'epics', body.epic));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => upsertById(
+                data,
+                'epics',
+                normalizeEpicForSave(data, body.epic, context.actor)
+            ));
         case '/api/epics/delete':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => ({
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
                 ...data,
                 epics: data.epics.filter(epic => epic.id !== body.id),
                 tasks: data.tasks.map(task => task.epicId === body.id ? { ...task, epicId: undefined } : task),
                 goals: data.goals.map(goal => goal.epicId === body.id ? { ...goal, epicId: undefined } : goal)
             }));
         case '/api/transactions/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'transactions', body.transaction, true));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => (
+                saveFinancialTransaction(data, body.transaction, context.actor)
+            ));
         case '/api/accounts/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'accounts', body.account));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => {
+                const withAccount = upsertById(data, 'accounts', body.account);
+                return isObject(body.goal) ? upsertById(withAccount, 'goals', body.goal) : withAccount;
+            });
         case '/api/goals/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'goals', body.goal));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => upsertById(data, 'goals', body.goal));
         case '/api/budgets/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => ({
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
                 ...data,
                 budgets: Array.isArray(body.budgets) ? body.budgets as AppData['budgets'] : data.budgets
             }));
         case '/api/users/update':
         case '/api/users/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => saveFamilyUser(data, body.user, context.actor));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => saveFamilyUser(data, body.user, context.actor));
         case '/api/users/archive':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => setFamilyUserActive(data, body.userId || body.id, false, context.actor));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => setFamilyUserActive(data, body.userId || body.id, false, context.actor));
         case '/api/users/restore':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => setFamilyUserActive(data, body.userId || body.id, true, context.actor));
-        case '/api/reward-logs/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => ({
-                ...data,
-                rewardLogs: [body.log as AppData['rewardLogs'][number], ...data.rewardLogs]
-            }));
-        case '/api/inventory/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'inventory', body.item, true));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => setFamilyUserActive(data, body.userId || body.id, true, context.actor));
+        case '/api/users/check-in':
+            return sendCommand(res, revision, context, pathname, body, data => checkInFamilyMember(data, context.actor));
+        case '/api/family/settings':
+            return sendCommand(res, revision, context, pathname, body, data => {
+                if (!isAdmin(context.actor)) throw new ForbiddenError('Only family parents can change family settings');
+                return updateFamilySettings(data, body.settings);
+            });
+        case '/api/rewards/save':
+            return sendCommand(res, revision, context, pathname, body, data => {
+                if (!isAdmin(context.actor)) throw new ForbiddenError('Only family parents can manage rewards');
+                return upsertById(data, 'rewards', normalizeRewardForSave(data, body.reward, context.actor));
+            });
+        case '/api/rewards/archive':
+            return sendCommand(res, revision, context, pathname, body, data => {
+                if (!isAdmin(context.actor)) throw new ForbiddenError('Only family parents can manage rewards');
+                return archiveReward(data, body.rewardId || body.id);
+            });
+        case '/api/rewards/purchase':
+            return sendCommand(res, revision, context, pathname, body, data => purchaseReward(data, body.rewardId, context.actor));
+        case '/api/rewards/use':
+            return sendCommand(res, revision, context, pathname, body, data => useReward(data, body.inventoryId || body.id, context.actor));
         case '/api/savings-goals/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'savingsGoals', body.goal));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => upsertById(data, 'savingsGoals', body.goal));
+        case '/api/savings-goals/contribute':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => contributeToSavingsGoal(data, {
+                goalId: body.goalId,
+                sourceAccountId: body.sourceAccountId,
+                amount: body.amount,
+                message: body.message
+            }, context.actor));
         case '/api/contributions/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => ({
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
                 ...data,
                 contributions: [body.contribution as AppData['contributions'][number], ...data.contributions]
             }));
         case '/api/subscriptions/save':
-            assertCanWrite(context.actor, pathname, body, currentData());
-            return sendMutation(res, revision, context, data => upsertById(data, 'subscriptions', body.subscription));
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => upsertById(data, 'subscriptions', body.subscription));
+        case '/api/subscriptions/delete':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
+                ...data,
+                subscriptions: data.subscriptions.filter(subscription => subscription.id !== body.id)
+            }));
+        case '/api/subscriptions/pay':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => (
+                paySubscription(data, body.subscriptionId || body.id, context.actor)
+            ));
+        case '/api/shopping/items/add':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => addShoppingItem(data, {
+                id: body.id,
+                title: body.title,
+                category: body.category
+            }, context.actor));
+        case '/api/shopping/items/set-completed':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => (
+                setShoppingItemCompleted(data, body.id, body.completed)
+            ));
+        case '/api/shopping/items/delete':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => ({
+                ...data,
+                shoppingList: data.shoppingList.filter(item => item.id !== body.id)
+            }));
+        case '/api/shopping/checkout':
+            return sendAuthorizedCommand(res, revision, context, pathname, body, data => checkoutShoppingItems(data, {
+                itemIds: body.itemIds,
+                totalAmount: body.totalAmount,
+                accountId: body.accountId
+            }, context.actor));
         case '/api/batch':
             return sendMutation(res, revision, context, data => applyScopedUpdates(
                 data,
@@ -252,6 +358,50 @@ function sendMutation(
     });
 }
 
+function sendCommand(
+    res: ServerResponse,
+    revision: number | null,
+    context: RequestContext,
+    pathname: string,
+    body: Record<string, unknown>,
+    mutator: (data: AppData) => AppData
+) {
+    const providedMutationId = typeof body.mutationId === 'string' ? body.mutationId.trim() : '';
+    if (providedMutationId && !/^[A-Za-z0-9._:-]{8,180}$/.test(providedMutationId)) {
+        throw badRequest('Mutation id has an invalid format');
+    }
+    const mutationId = providedMutationId || `legacy-${randomUUID()}`;
+    const requestPayload = { ...body };
+    delete requestPayload.revision;
+    delete requestPayload.mutationId;
+    const requestHash = createHash('sha256').update(canonicalJson(requestPayload)).digest('hex');
+    const envelope = db.mutateCommand(context.familyId, revision, {
+        mutationId,
+        actorId: context.actor.id,
+        operation: pathname,
+        requestHash
+    }, mutator, context.actor);
+    sendJson(res, 200, {
+        revision: envelope.revision,
+        data: filterForActor(envelope.data, context.actor),
+        command: envelope.command
+    });
+}
+
+function sendAuthorizedCommand(
+    res: ServerResponse,
+    revision: number | null,
+    context: RequestContext,
+    pathname: string,
+    body: Record<string, unknown>,
+    mutator: (data: AppData) => AppData
+) {
+    return sendCommand(res, revision, context, pathname, body, data => {
+        assertCanWrite(context.actor, pathname, body, data);
+        return mutator(data);
+    });
+}
+
 function createInvite(req: IncomingMessage, context: RequestContext, body: Record<string, unknown>) {
     const wantsNewFamily = body.newFamily === true || (typeof body.familyName === 'string' && body.familyName.trim().length > 0);
     if (wantsNewFamily && !context.isDeveloperOwner) {
@@ -272,7 +422,7 @@ function createInvite(req: IncomingMessage, context: RequestContext, body: Recor
 
     return {
         invite,
-        url: `${publicBaseUrl(req)}?invite=${encodeURIComponent(invite.token)}`
+        url: familyInviteUrl(publicBaseUrl(req), invite.token)
     };
 }
 
@@ -288,6 +438,14 @@ function reorderTasks(data: AppData, rawUpdates: unknown): AppData {
         updates.set(update.id, { status, sortOrder: Math.round(sortOrder) });
     }
     if (updates.size === 0) return data;
+
+    for (const [id, update] of updates) {
+        const task = data.tasks.find(item => item.id === id);
+        if (!task) throw badRequest(`Task not found: ${id}`);
+        if (task.status !== update.status) {
+            throw badRequest('Task status changes must use /api/tasks/status');
+        }
+    }
 
     return {
         ...data,
@@ -614,6 +772,9 @@ function resolveRequestContext(auth: AuthContext, req: IncomingMessage): Request
     const authForActor = auth.isInternal && Number.isFinite(headerTelegramId)
         ? { ...auth, telegramId: headerTelegramId }
         : auth;
+    if (!authForActor.isInternal) {
+        db.syncTelegramProfile(authForActor);
+    }
     const actor = db.resolveActor(authForActor);
     if (!actor) {
         throw new ForbiddenError('Telegram user is authenticated but not linked to a family profile');
@@ -633,6 +794,38 @@ function exportForActor(context: RequestContext) {
         revision: envelope.revision,
         data: filterForActor(envelope.data, context.actor)
     };
+}
+
+async function sendTelegramAvatar(res: ServerResponse, pathname: string, context: RequestContext) {
+    const encodedUserId = pathname.slice('/api/users/'.length, -'/avatar'.length);
+    let userId = '';
+    try {
+        userId = decodeURIComponent(encodedUserId);
+    } catch {
+        return sendJson(res, 404, { error: 'Avatar unavailable' });
+    }
+    if (!/^[A-Za-z0-9_-]{1,120}$/.test(userId)) {
+        return sendJson(res, 404, { error: 'Avatar unavailable' });
+    }
+
+    const visibleData = filterForActor(db.getAppData(context.familyId, context.actor), context.actor);
+    const target = [...visibleData.members, ...(visibleData.archivedMembers || [])]
+        .find(member => member.id === userId);
+    if (!target?.telegramId) {
+        return sendJson(res, 404, { error: 'Avatar unavailable' });
+    }
+
+    const image = await telegramAvatarService.getAvatar(target.telegramId);
+    if (!image) {
+        return sendJson(res, 404, { error: 'Avatar unavailable' });
+    }
+    const bytes = Buffer.from(image.bytes);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Type', image.contentType);
+    res.setHeader('Content-Length', String(bytes.byteLength));
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.statusCode = 200;
+    res.end(bytes);
 }
 
 function getAiConfig() {
@@ -682,8 +875,11 @@ function normalizeFamilyUser(rawUser: unknown, previous?: User): User {
         telegramLastName: Object.prototype.hasOwnProperty.call(rawUser, 'telegramLastName')
             ? normalizeOptionalString(rawUser.telegramLastName, 80)
             : previous?.telegramLastName,
+        avatarUrl: previous?.avatarUrl,
         streak: normalizeInteger(rawUser.streak, previous?.streak || 0),
-        lastLoginDate: normalizeOptionalString(rawUser.lastLoginDate, 32)
+        lastLoginDate: Object.prototype.hasOwnProperty.call(rawUser, 'lastLoginDate')
+            ? normalizeOptionalString(rawUser.lastLoginDate, 32)
+            : previous?.lastLoginDate
     };
 }
 
@@ -773,15 +969,29 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 async function serveStatic(res: ServerResponse, rawPathname: string) {
     const pathname = decodeURIComponent(rawPathname);
     const requested = pathname === '/' ? '/index.html' : pathname;
-    const safePath = path.normalize(requested).replace(/^(\.\.(\/|\\|$))+/, '');
-    const filePath = path.join(staticDir, safePath);
-    const resolved = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
-        ? filePath
-        : path.join(staticDir, 'index.html');
-
-    if (!resolved.startsWith(staticDir) || !fs.existsSync(resolved)) {
+    const root = path.resolve(staticDir);
+    const safePath = path.normalize(requested).replace(/^[/\\]+/, '');
+    const filePath = path.resolve(root, safePath);
+    if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
         sendJson(res, 404, { error: 'Not found' });
         return;
+    }
+    const resolved = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
+        ? filePath
+        : path.join(root, 'index.html');
+
+    if (!fs.existsSync(resolved)) {
+        sendJson(res, 404, { error: 'Not found' });
+        return;
+    }
+
+    if (path.basename(resolved) === 'index.html') {
+        res.setHeader(
+            'Content-Security-Policy',
+            "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; "
+            + "img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; "
+            + "base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+        );
     }
 
     res.writeHead(200, {
@@ -801,8 +1011,6 @@ function publicBaseUrl(req: IncomingMessage) {
         const port = process.env.FAMTRACK_PUBLIC_PORT ? `:${process.env.FAMTRACK_PUBLIC_PORT}` : '';
         return `https://${publicHost}${port}`;
     }
-    const directMiniApp = process.env.FAMTRACK_MINIAPP_DIRECT_URL;
-    if (directMiniApp) return directMiniApp.replace(/\/+$/, '');
     const proto = headerValue(req, 'x-forwarded-proto') || 'https';
     return `${proto}://${req.headers.host || 'localhost'}`;
 }
@@ -812,14 +1020,34 @@ function sendJson(res: ServerResponse, status: number, payload: unknown) {
     res.end(JSON.stringify(payload));
 }
 
-function handleError(res: ServerResponse, error: unknown) {
+function handleError(
+    res: ServerResponse,
+    error: unknown,
+    request: { requestId: string; method: string; pathname: string }
+) {
     const status = error instanceof AuthError || error instanceof RevisionConflictError || error instanceof ForbiddenError
         ? error.status
         : typeof (error as { status?: unknown })?.status === 'number'
             ? (error as { status: number }).status
             : 500;
     const message = error instanceof Error ? error.message : 'Internal server error';
-    sendJson(res, status, { error: message });
+    const code = typeof (error as { code?: unknown })?.code === 'string'
+        ? (error as { code: string }).code
+        : undefined;
+    if (status >= 500) {
+        console.error(JSON.stringify({
+            level: 'error',
+            event: 'request_failed',
+            ...request,
+            status,
+            error: message
+        }));
+    }
+    sendJson(res, status, {
+        error: status >= 500 ? 'Internal server error' : message,
+        ...(code ? { code } : {}),
+        requestId: request.requestId
+    });
 }
 
 function headerValue(req: IncomingMessage, name: string) {
@@ -917,6 +1145,7 @@ function routeGroup(pathname: string) {
     if (pathname.startsWith('/api/savings-goals/')) return 'api_finance';
     if (pathname.startsWith('/api/contributions/')) return 'api_finance';
     if (pathname.startsWith('/api/subscriptions/')) return 'api_finance';
+    if (pathname.startsWith('/api/shopping/')) return 'api_shopping';
     if (pathname.startsWith('/api/reward-logs/')) return 'api_rewards';
     if (pathname.startsWith('/api/inventory/')) return 'api_rewards';
     if (pathname === '/api/batch') return 'api_batch';
@@ -930,4 +1159,12 @@ function routeGroup(pathname: string) {
 
 function isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+}
+
+function canonicalJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+    if (isObject(value)) {
+        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value) ?? 'null';
 }

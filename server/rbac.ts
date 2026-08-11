@@ -110,11 +110,17 @@ export const assertCanWrite = (actor: User, pathname: string, body: Record<strin
         case '/api/transactions/save':
         case '/api/savings-goals/save':
         case '/api/contributions/save':
+        case '/api/savings-goals/contribute':
         case '/api/subscriptions/save':
-        case '/api/reward-logs/save':
-        case '/api/inventory/save':
+        case '/api/subscriptions/delete':
+        case '/api/subscriptions/pay':
+        case '/api/shopping/checkout':
             if (isAdmin(actor)) return;
             break;
+        case '/api/shopping/items/add':
+        case '/api/shopping/items/set-completed':
+        case '/api/shopping/items/delete':
+            return;
         case '/api/users/update': {
             const user = body.user as User | undefined;
             const previous = data.members.find(member => member.id === user?.id);
@@ -158,6 +164,18 @@ export const sanitizeBatchUpdates = (actor: User, updates: Partial<AppData>, dat
         notes: _ignoredNotes,
         ...rest
     } = updates;
+    const commandOwnedKeys = new Set<keyof AppData>([
+        'tasks',
+        'members',
+        'rewards',
+        'rewardLogs',
+        'inventory'
+    ]);
+    for (const key of Object.keys(rest) as Array<keyof AppData>) {
+        if (commandOwnedKeys.has(key)) {
+            throw new ForbiddenError(`Batch update key requires a domain command: ${key}`);
+        }
+    }
     if (isOwner(actor)) return rest;
 
     const adminAllowedKeys = new Set<keyof AppData>([
@@ -171,16 +189,12 @@ export const sanitizeBatchUpdates = (actor: User, updates: Partial<AppData>, dat
         'contributions',
         'subscriptions',
         'budgets',
-        'rewardLogs',
-        'inventory',
         'events',
         'members'
     ]);
     const childAllowedKeys = new Set<keyof AppData>([
         'tasks',
         'shoppingList',
-        'rewardLogs',
-        'inventory',
         'events',
         'members'
     ]);
@@ -215,16 +229,6 @@ export const sanitizeBatchUpdates = (actor: User, updates: Partial<AppData>, dat
     }
 
     if (!isAdmin(actor)) {
-        for (const item of rest.inventory || []) {
-            if (item.ownerId !== actor.id) {
-                throw new ForbiddenError('Child users can only change their own inventory');
-            }
-        }
-        for (const log of rest.rewardLogs || []) {
-            if (log.userId !== actor.id) {
-                throw new ForbiddenError('Child users can only change their own reward logs');
-            }
-        }
         for (const event of rest.events || []) {
             if (event.actorId !== actor.id) {
                 throw new ForbiddenError('Child users can only create their own events');

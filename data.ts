@@ -22,6 +22,7 @@ export const INITIAL_DATA: AppData = {
       description: 'Белую, 20x20',
       status: 'TODO', 
       priority: 'HIGH',
+      difficulty: 'MEDIUM',
       points: 50, 
       assigneeId: 'u1', 
       createdById: 'u2',

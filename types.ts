@@ -1,11 +1,12 @@
 
 import React from 'react';
 import { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType, Subscription } from './finance.model';
-import { Task, Epic, TaskStatus, Priority, Frequency } from './tasks.model';
+import { Task, Epic, TaskStatus, Priority, TaskDifficulty, Frequency } from './tasks.model';
 import { User, Reward, RewardLog, Role, InventoryItem } from './family.model';
 import { ShoppingItem } from './shopping.model';
 import { AppEvent } from './events.model';
 import { Note, NoteScope, NoteContentType, NoteChecklistItem } from './notes.model';
+import { FamilySettings } from './settings.model';
 
 export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY' | 'SHOP';
 
@@ -15,6 +16,7 @@ export interface Family {
   ownerUserId?: string;
   createdAt: number;
   revision: number;
+  settings: FamilySettings;
 }
 
 export interface FamilyInvite {
@@ -93,8 +95,9 @@ export interface ToastMessage {
 
 // Re-export domain types for convenience
 export type { Account, FinancialGoal, SavingsGoal, GoalContribution, BudgetPlan, Transaction, TransactionCategory, TransactionType, AccountType, Subscription };
-export type { Task, Epic, TaskStatus, Priority, Frequency };
+export type { Task, Epic, TaskStatus, Priority, TaskDifficulty, Frequency };
 export type { User, Reward, RewardLog, Role, InventoryItem };
 export type { ShoppingItem };
 export type { AppEvent };
 export type { Note, NoteScope, NoteContentType, NoteChecklistItem };
+export type { FamilySettings, NotificationDeliveryMode, TaskNotificationMode } from './settings.model';

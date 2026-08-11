@@ -4,6 +4,8 @@ export interface AuthContext {
     telegramId?: number;
     username?: string;
     firstName?: string;
+    lastName?: string;
+    photoUrl?: string;
     isInternal?: boolean;
 }
 
@@ -15,6 +17,7 @@ export interface AuthConfig {
     developerOwnerTelegramIds?: Set<number>;
     enforceAllowlist?: boolean;
     internalApiSecret?: string;
+    initDataMaxAgeSeconds?: number;
 }
 
 export class AuthError extends Error {
@@ -53,7 +56,8 @@ export const getAuthConfig = (): AuthConfig => {
         allowedTelegramUsernames,
         developerOwnerTelegramIds,
         enforceAllowlist: process.env.FAMTRACK_REQUIRE_ALLOWLIST === '1',
-        internalApiSecret: process.env.FAMTRACK_INTERNAL_API_SECRET
+        internalApiSecret: process.env.FAMTRACK_INTERNAL_API_SECRET,
+        initDataMaxAgeSeconds: normalizePositiveInteger(process.env.FAMTRACK_INIT_DATA_MAX_AGE_SECONDS, 86400)
     };
 };
 
@@ -62,7 +66,7 @@ export const validateRequestAuth = (
     config: AuthConfig,
     internalSecret?: string
 ): AuthContext => {
-    if (config.internalApiSecret && internalSecret === config.internalApiSecret) {
+    if (config.internalApiSecret && internalSecret && secretsEqual(internalSecret, config.internalApiSecret)) {
         return { isInternal: true, username: 'famtrack-agent' };
     }
 
@@ -77,7 +81,7 @@ export const validateRequestAuth = (
         throw new AuthError('Telegram initData is required');
     }
 
-    const user = validateTelegramInitData(initData, config.botToken);
+    const user = validateTelegramInitData(initData, config.botToken, config.initDataMaxAgeSeconds);
     const telegramId = Number(user.id);
     const username = typeof user.username === 'string' ? user.username.toLowerCase() : undefined;
     const allowedById = config.allowedTelegramIds.size > 0 && config.allowedTelegramIds.has(telegramId);
@@ -95,11 +99,17 @@ export const validateRequestAuth = (
     return {
         telegramId,
         username,
-        firstName: typeof user.first_name === 'string' ? user.first_name : undefined
+        firstName: typeof user.first_name === 'string' ? user.first_name : undefined,
+        lastName: typeof user.last_name === 'string' ? user.last_name : undefined,
+        photoUrl: normalizeHttpsUrl(user.photo_url)
     };
 };
 
-export const validateTelegramInitData = (initData: string, botToken: string): Record<string, unknown> => {
+export const validateTelegramInitData = (
+    initData: string,
+    botToken: string,
+    maxAgeSeconds = 0
+): Record<string, unknown> => {
     const params = new URLSearchParams(initData);
     const hash = params.get('hash');
     if (!hash) throw new AuthError('Telegram initData hash is missing');
@@ -119,6 +129,15 @@ export const validateTelegramInitData = (initData: string, botToken: string): Re
         throw new AuthError('Telegram initData signature is invalid');
     }
 
+    if (maxAgeSeconds > 0) {
+        const authDate = Number(params.get('auth_date'));
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const ageSeconds = nowSeconds - authDate;
+        if (!Number.isFinite(authDate) || authDate <= 0 || ageSeconds > maxAgeSeconds || ageSeconds < -30) {
+            throw new AuthError('Telegram initData has expired');
+        }
+    }
+
     const userJson = params.get('user');
     if (!userJson) throw new AuthError('Telegram user is missing');
 
@@ -129,4 +148,25 @@ export const validateTelegramInitData = (initData: string, botToken: string): Re
     } catch {
         throw new AuthError('Telegram user payload is invalid');
     }
+};
+
+const normalizeHttpsUrl = (value: unknown) => {
+    if (typeof value !== 'string') return undefined;
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' ? url.toString() : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+const normalizePositiveInteger = (value: unknown, fallback: number) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+};
+
+const secretsEqual = (left: string, right: string) => {
+    const leftBuffer = Buffer.from(left);
+    const rightBuffer = Buffer.from(right);
+    return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 };
