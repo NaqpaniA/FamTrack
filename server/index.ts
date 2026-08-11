@@ -10,7 +10,12 @@ import { ForbiddenError, assertCanWrite, filterForActor, isAdmin, isOwner } from
 import { familyInviteUrl, telegramMiniAppInviteUrl } from './links.js';
 import { TelegramAvatarService } from './telegram-avatar.js';
 import { familyRevisionEtag, requestEtagMatches } from './http-cache.js';
-import { applyCapabilities, readFeatureCapabilities, type FeatureCapabilities } from './features.js';
+import {
+    applyCapabilities,
+    isRoutineCompletionAvailable,
+    readFeatureCapabilities,
+    type FeatureCapabilities
+} from './features.js';
 import { completeRoutine, pauseRoutine, recordRoutineUnit, saveRoutine, skipRoutine } from './routines.js';
 import { deleteWishlistItem, saveWishlist, saveWishlistItem, setWishlistReservation } from './wishlists.js';
 import { updateDashboardPreferences } from './preferences.js';
@@ -480,8 +485,16 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: st
             requireFeature(capabilities, 'routines');
             return sendCommand(res, revision, context, pathname, body, data => pauseRoutine(data, body.routineId || body.id, body.paused, context.actor));
         case '/api/routines/complete':
-            requireFeature(capabilities, 'routines');
-            return sendCommand(res, revision, context, pathname, body, data => completeRoutine(data, body, context.actor));
+            return sendCommand(res, revision, context, pathname, body, data => {
+                // A staged rollout may hide routine management after legacy
+                // recurring tasks have already been migrated. Keep their
+                // current occurrence completable without exposing creation,
+                // pause, skip or accumulator commands.
+                if (!isRoutineCompletionAvailable(data, body, capabilities)) {
+                    requireFeature(capabilities, 'routines');
+                }
+                return completeRoutine(data, body, context.actor);
+            });
         case '/api/routines/record-unit':
             requireFeature(capabilities, 'routines');
             return sendCommand(res, revision, context, pathname, body, data => recordRoutineUnit(data, body.routineId || body.id, body.units, context.actor));

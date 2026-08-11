@@ -185,6 +185,10 @@ export const DashboardScreen = ({
     const totalBalance = visibleAccounts.reduce((sum, acc) => sum + acc.balance, 0);
     const streak = data.currentUser.streak || 0;
     const householdEnabled = data.capabilities?.routines === true;
+    const agendaTasks = visibleTasks.filter(task => (
+        task.status !== 'DONE'
+        && (isToday(task.dueDate) || isOverdue(task.dueDate))
+    ));
     const notesWidget = <NotesWidget data={data} onOpenAll={onOpenNotes} onCreate={onAddNote} />;
     const projectsWidget = <ProjectsWidget data={data} visibleTasks={visibleTasks} onNavigate={onNavigate} onAddEpic={onAddEpic} />;
     const activityWidget = <ActivityWidget data={data} />;
@@ -254,17 +258,18 @@ export const DashboardScreen = ({
 
              {/* Today Tasks */}
              <div>
-                <SectionHeader title="На повестке" />
-                <Panel className="mt-3 overflow-hidden">
-                    {visibleTasks.filter(t => t.status !== 'DONE' && (isToday(t.dueDate) || isOverdue(t.dueDate))).length === 0 ? (
-                         <div className="p-6 text-center text-gray-400">
-                             <Sparkles className="mx-auto mb-2 opacity-50" size={28} />
-                             <p className="text-sm">На сегодня задач нет. Отдыхаем!</p>
+                <SectionHeader
+                    title="На повестке"
+                    action={<button type="button" onClick={() => onNavigate('TASKS')} className="text-sm font-medium text-blue-600">Все</button>}
+                />
+                <Panel className="mt-2 overflow-hidden">
+                    {agendaTasks.length === 0 ? (
+                         <div className="flex items-center gap-2.5 px-4 py-3 text-gray-400">
+                             <Sparkles className="shrink-0 opacity-50" size={19} />
+                             <p className="text-sm">Сегодня свободно</p>
                          </div>
                     ) : (
-                        visibleTasks
-                           .filter(t => t.status !== 'DONE' && (isToday(t.dueDate) || isOverdue(t.dueDate)))
-                           .map(task => (
+                        agendaTasks.slice(0, 3).map(task => (
                                <div key={task.id} className="px-4">
                                    <TaskItem 
                                       task={task} 
@@ -272,13 +277,16 @@ export const DashboardScreen = ({
                                       epic={data.epics.find(e => e.id === task.epicId)}
                                       onClick={onTaskClick}
                                       onStatusChange={(status) => onTaskStatusChange(task.id, status)}
+                                      onRoutineComplete={task.routineTemplateId ? () => householdActions.completeRoutine(task.routineTemplateId!, task.id) : undefined}
                                    />
                                </div>
                            ))
                     )}
-                    <div className="p-2.5 text-center border-t border-gray-50">
-                         <button onClick={() => onNavigate('TASKS')} className="text-xs text-gray-400 font-bold uppercase tracking-wider">Посмотреть все задачи</button>
-                    </div>
+                    {agendaTasks.length > 3 ? (
+                        <button type="button" onClick={() => onNavigate('TASKS')} className="w-full border-t border-gray-50 px-3 py-2 text-center text-xs font-bold text-blue-600">
+                            Ещё {agendaTasks.length - 3}
+                        </button>
+                    ) : null}
                 </Panel>
             </div>
 

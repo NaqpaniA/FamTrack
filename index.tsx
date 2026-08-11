@@ -383,6 +383,7 @@ const FamTrackApp = () => {
 	                onTaskClick={t => { setEditingTask(t); setTaskModalOpen(true); }} 
 	                onAddTask={() => { setEditingTask(null); setTaskModalOpen(true); }}
 	                onStatusChange={actions.tasks.toggleStatus}
+	                onRoutineComplete={actions.routines.complete}
 	                onMoveTask={actions.tasks.move}
 	                onAddEpic={() => openEpicModal()}
 	                onEditEpic={(epic) => openEpicModal(epic)}
@@ -448,6 +449,10 @@ const FamTrackApp = () => {
               currentUser={data.currentUser}
               onSave={handleTaskSave} 
               onDelete={handleTaskDelete} 
+              onRoutineComplete={(routineId, taskId) => {
+                  actions.routines.complete(routineId, taskId);
+                  setTaskModalOpen(false);
+              }}
             />
        </Modal>
 

@@ -65,7 +65,15 @@ const reminderTimestamp = (date: string, clock: string) => {
 
 // --- Components ---
 
-export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, epic?: Epic, onClick: (task: Task) => void, onStatusChange?: (status: TaskStatus) => void }> = ({ task, assignee, epic, onClick, onStatusChange }) => {
+export const TaskItem: React.FC<{
+  key?: React.Key,
+  task: Task,
+  assignee?: User,
+  epic?: Epic,
+  onClick: (task: Task) => void,
+  onStatusChange?: (status: TaskStatus) => void,
+  onRoutineComplete?: () => void
+}> = ({ task, assignee, epic, onClick, onStatusChange, onRoutineComplete }) => {
   const completedSub = task.subtasks.filter(s => s.isCompleted).length;
   const totalSub = task.subtasks.length;
   const priorityConfig = PRIORITIES[task.priority] || PRIORITIES.LOW;
@@ -75,7 +83,9 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
 
   const handleCheck = (e: React.MouseEvent<HTMLButtonElement>) => {
       e.stopPropagation();
-      if (onStatusChange && !isRoutineTask) {
+      if (isRoutineTask) {
+          onRoutineComplete?.();
+      } else if (onStatusChange) {
           const nextStatus = task.status === 'DONE' ? 'TODO' : 'DONE';
           onStatusChange(nextStatus);
       }
@@ -86,10 +96,12 @@ export const TaskItem: React.FC<{ key?: React.Key, task: Task, assignee?: User, 
       <button 
         type="button"
         onClick={handleCheck}
-        aria-label={isRoutineTask ? `Рутина «${task.title}» управляется на главной` : task.status === 'DONE' ? `Вернуть задачу «${task.title}»` : `Завершить задачу «${task.title}»`}
-        title={task.status === 'DONE' ? 'Вернуть в работу' : 'Завершить'}
-        disabled={isRoutineTask}
-        className={`mt-1 transition-colors active:scale-90 transform disabled:cursor-default ${task.status === 'DONE' ? 'text-green-500' : isRoutineTask ? 'text-blue-300' : 'text-gray-300 hover:text-gray-400'}`}
+        aria-label={isRoutineTask
+          ? onRoutineComplete ? `Завершить рутину «${task.title}»` : `Рутина «${task.title}» управляется на главной`
+          : task.status === 'DONE' ? `Вернуть задачу «${task.title}»` : `Завершить задачу «${task.title}»`}
+        title={isRoutineTask ? 'Завершить рутину' : task.status === 'DONE' ? 'Вернуть в работу' : 'Завершить'}
+        disabled={isRoutineTask && !onRoutineComplete}
+        className={`mt-1 transition-colors active:scale-90 transform disabled:cursor-default ${task.status === 'DONE' ? 'text-green-500' : isRoutineTask ? onRoutineComplete ? 'text-blue-500' : 'text-blue-300' : 'text-gray-300 hover:text-gray-400'}`}
       >
         {task.status === 'DONE' ? <CheckCircle2 size={24} className="fill-green-50" /> : <Circle size={24} />}
       </button>
@@ -230,7 +242,7 @@ export const KanbanCard: React.FC<{
 
 // --- Editors ---
 
-export const TaskEditor = ({ task, onSave, onDelete, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
+export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, onRoutineComplete?: (routineId: string, taskId: string) => void, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Priority>(task?.priority || 'MEDIUM');
@@ -309,7 +321,7 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, availableTa
     <div className="space-y-4 pb-20">
       {isRoutineTask ? (
           <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-              Это экземпляр рутины. Выполнение, пропуск и расписание управляются в блоке «Рутины сегодня» на главной.
+              Это экземпляр рутины. Его можно выполнить здесь; расписание и пропуск появятся в блоке «Рутины сегодня» после включения следующего этапа.
           </div>
       ) : null}
       <input 
@@ -576,14 +588,20 @@ export const TaskEditor = ({ task, onSave, onDelete, members, epics, availableTa
       </div>
       
       <div className="pt-4 flex gap-3">
-          {task && (
+          {task && !isRoutineTask && (
               <button type="button" aria-label="Удалить задачу" title="Удалить задачу" onClick={() => onDelete(task.id)} className="p-3 rounded-xl bg-red-50 text-red-500">
                   <Trash2 size={20} />
               </button>
           )}
-          <button type="button" onClick={handleSave} disabled={isRoutineTask} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform disabled:opacity-40">
-              Сохранить
-          </button>
+          {isRoutineTask && task?.routineTemplateId && onRoutineComplete ? (
+              <button type="button" onClick={() => onRoutineComplete(task.routineTemplateId!, task.id)} className="flex-1 rounded-xl bg-blue-600 py-3 font-bold text-white shadow-lg transition-transform active:scale-95">
+                  Выполнить рутину
+              </button>
+          ) : (
+              <button type="button" onClick={handleSave} disabled={isRoutineTask} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform disabled:opacity-40">
+                  Сохранить
+              </button>
+          )}
       </div>
     </div>
   );
@@ -710,6 +728,7 @@ export const TasksScreen = ({
     onTaskClick, 
     onAddTask,
     onStatusChange,
+    onRoutineComplete,
     onMoveTask,
     onAddEpic,
     onEditEpic,
@@ -720,6 +739,7 @@ export const TasksScreen = ({
     onTaskClick: (t: Task) => void,
     onAddTask: () => void,
     onStatusChange: (id: string, status: TaskStatus) => void,
+    onRoutineComplete: (routineId: string, taskId: string) => void,
     onMoveTask: (id: string, status: TaskStatus, beforeTaskId?: string) => void,
     onAddEpic: () => void,
     onEditEpic: (epic: Epic) => void,
@@ -890,6 +910,7 @@ export const TasksScreen = ({
                                         epic={data.epics.find(e => e.id === task.epicId)}
                                         onClick={onTaskClick}
                                         onStatusChange={(s) => onStatusChange(task.id, s)}
+                                        onRoutineComplete={task.routineTemplateId ? () => onRoutineComplete(task.routineTemplateId!, task.id) : undefined}
                                     />
                                 </div>
                             ))

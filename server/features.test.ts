@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { INITIAL_DATA } from '../data.js';
-import { applyCapabilities, readFeatureCapabilities } from './features.js';
+import { applyCapabilities, isRoutineCompletionAvailable, readFeatureCapabilities } from './features.js';
 
 test('release capabilities are off by default and parse explicit truthy values', () => {
     assert.deepEqual(readFeatureCapabilities({} as NodeJS.ProcessEnv), {
@@ -31,4 +31,28 @@ test('disabled capabilities do not expose release collections', () => {
     assert.deepEqual(result.routineEvents, []);
     assert.deepEqual(result.wishlists, []);
     assert.equal(result.pantry, undefined);
+});
+
+test('disabled routine UI still allows completing an existing open occurrence', () => {
+    const capabilities = readFeatureCapabilities({} as NodeJS.ProcessEnv);
+    const data = {
+        ...INITIAL_DATA,
+        tasks: [{ id: 'task-open', routineTemplateId: 'routine-existing', status: 'TODO' }] as never,
+        routines: [{ id: 'routine-existing', openTaskId: 'task-open' }] as never
+    };
+    assert.equal(isRoutineCompletionAvailable(data, {
+        routineId: 'routine-existing',
+        taskId: 'task-open'
+    }, capabilities), true);
+    assert.equal(isRoutineCompletionAvailable(data, {
+        routineId: 'routine-existing',
+        taskId: 'other-task'
+    }, capabilities), false);
+    assert.equal(isRoutineCompletionAvailable({
+        ...data,
+        tasks: [{ id: 'task-open', routineTemplateId: 'routine-existing', status: 'DONE' }] as never
+    }, {
+        routineId: 'routine-existing',
+        taskId: 'task-open'
+    }, capabilities), false);
 });

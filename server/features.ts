@@ -32,6 +32,25 @@ export const applyCapabilities = (data: AppData, capabilities: FeatureCapabiliti
     pantry: capabilities.pantry ? data.pantry : undefined
 });
 
+export const isRoutineCompletionAvailable = (
+    data: AppData,
+    input: Record<string, unknown>,
+    capabilities: FeatureCapabilities
+) => {
+    if (capabilities.routines) return true;
+    const routineId = typeof input.routineId === 'string' ? input.routineId.trim() : '';
+    const taskId = typeof input.taskId === 'string' ? input.taskId.trim() : '';
+    if (!routineId || !taskId) return false;
+    const task = data.tasks.find(item => (
+        item.id === taskId
+        && item.routineTemplateId === routineId
+        && item.status !== 'DONE'
+        && item.status !== 'DROPPED'
+    ));
+    const routine = (data.routines || []).find(item => item.id === routineId && item.openTaskId === taskId);
+    return !!task && !!routine;
+};
+
 const withoutInternalAggregates = (data: AppData): AppData => {
     const { purchaseImports: _purchaseImports, ...publicData } = data;
     return publicData;
