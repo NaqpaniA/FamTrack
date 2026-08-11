@@ -11,11 +11,14 @@ observation gate remain open.
 |---|---|
 | Activated at | `2026-08-11T19:20:40Z` |
 | Release evidence id | `20260811T192010Z-17067` |
-| FamTrack source | `283781c4388e2e6cfdf5ffb7d3aae4392b6b20e6` |
+| Release 1 source | `283781c4388e2e6cfdf5ffb7d3aae4392b6b20e6` |
 | pers-infra source | `7b51c6c85374ea6ec77f9c5af9890996f5158f7d` |
 | Previous image | `sha256:b3bfbc250b3ef003bbdde35143f65e42cfd60c64e8d4ff93d13914ebb86e6a3d` |
-| Active image | `sha256:abc3b00eee37f52564b32c9ba92e950aabc4790d6c66aa40386e3e99f984b9d6` |
-| Active tags | `famtrack:local`, `famtrack:candidate-20260811T192010Z-17067` |
+| Initial Release 1 image | `sha256:abc3b00eee37f52564b32c9ba92e950aabc4790d6c66aa40386e3e99f984b9d6` |
+| Hotfix source | `77544e0` |
+| Hotfix activated at | `2026-08-11T19:39:56Z` |
+| Hotfix evidence id | `20260811T193855Z-25506` |
+| Current active image | `sha256:5e3f2128c109515c048a3a1728afaa77ecb092007ebec449a246e68c85f55c60` |
 
 ## Gates and runtime evidence
 
@@ -36,6 +39,24 @@ observation gate remain open.
 - FamTrack, its reverse tunnel, the family bot, alert bot, Telegram proxy and
   the VPS Caddy service were active after deployment. No application or bot
   errors were observed after activation.
+
+## Immediate feedback hotfix
+
+The first Android acceptance pass found two issues: the empty "На повестке"
+card consumed too much vertical space, and migrated recurring tasks were not
+completable while the Release 2 routine dashboard was feature-disabled.
+
+Hotfix `77544e0` makes the empty agenda a compact single row, moves the all-task
+action into the section header and limits the preview to three tasks. Existing
+open routine occurrences can now be completed from the agenda, task list or
+task modal without enabling routine creation, pause, skip or accumulator UI.
+
+The hotfix gate passed typecheck, 82 server tests, 18 agent tests, production
+build and an isolated HTTP replay test. On a migrated production snapshot all
+three open routine occurrences passed the compatibility check. The hotfix
+release repeated all four migration/data comparisons with zero failures,
+served the expected new frontend asset publicly and recorded zero persistence
+or application errors after activation.
 
 ## Data safety and rollback boundary
 
@@ -60,12 +81,28 @@ exist, rollback must never restore revision 122 over production. A necessary
 rollback may change the image only after another current emergency snapshot;
 the database must move forward from revision 128 or later.
 
+The hotfix quiesced snapshot preserved revision 128 and 59 audited tenant rows:
+
+```text
+/home/naqpania/apps/famtrack/backups/releases/20260811T193855Z-25506/final.sqlite
+```
+
+After reopening clients, revision advanced to 129. Its current mode-`0600`
+emergency snapshot passed `quick_check` and the no-decrease comparison:
+
+```text
+/home/naqpania/apps/famtrack/backups/releases/20260811T193855Z-25506/emergency-post-open-r129.sqlite
+```
+
+The effective rollback floor is now revision 129 or later.
+
 ## Scope now in production
 
 - durable client outbox, idempotent replay and revision ETag/304;
 - route-scoped backend write sets and persistence/write metrics;
 - Telegram Glass, fullscreen/safe-area lifecycle and adaptive navigation;
-- container-reachable, token-private Telegram avatar fallback.
+- container-reachable, token-private Telegram avatar fallback;
+- compact agenda and completion compatibility for existing routine instances.
 
 Receipt imports already have tested atomic expense accounting in the deployed
 code: adult confirmation creates one `EXPENSE`, debits the selected account
