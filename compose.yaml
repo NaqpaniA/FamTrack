@@ -10,8 +10,10 @@ services:
       NODE_ENV: production
       FAMTRACK_AUTH_MODE: telegram
       FAMTRACK_DB_PATH: /data/famtrack.sqlite
+      FAMTRACK_IMPORTS_DIR: /data/imports
       FAMTRACK_STATIC_DIR: /app/dist
       FAMTRACK_TELEGRAM_PROXY: socks5h://host.docker.internal:11080
+      RECEIPT_OCR_URL: http://receipt-ocr:8090
       PORT: "8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -25,6 +27,27 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+  receipt-ocr:
+    profiles: ["receipt-ocr"]
+    build:
+      context: .
+      dockerfile: receipt-ocr/Dockerfile
+    image: famtrack-receipt-ocr:local
+    restart: unless-stopped
+    environment:
+      OCR_CONCURRENCY: "1"
+      OCR_MAX_BYTES: "12582912"
+      OCR_MAX_PIXELS: "40000000"
+      PADDLEOCR_LANG: ru
+    expose:
+      - "8090"
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
 
 volumes:
   famtrack-data:
