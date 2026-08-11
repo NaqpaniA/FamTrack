@@ -7,7 +7,9 @@ import {
     Gauge,
     Gift,
     HeartPulse,
+    History,
     ListPlus,
+    Medal,
     Minus,
     PackagePlus,
     Plus,
@@ -21,13 +23,15 @@ import type { Wishlist, WishlistItem } from './wishlist.model';
 import { Panel, SectionHeader } from './ui-kit';
 import { formatMoney } from './utils';
 
-const DASHBOARD_WIDGETS = ['routines', 'day-pulse', 'house-health', 'wishlists'] as const;
+const DASHBOARD_WIDGETS = ['routines', 'day-pulse', 'house-health', 'history', 'leaderboard', 'wishlists'] as const;
 type DashboardWidget = typeof DASHBOARD_WIDGETS[number];
 
 const WIDGET_LABELS: Record<DashboardWidget, string> = {
     routines: 'Рутины сегодня',
     'day-pulse': 'Пульс дня',
     'house-health': 'House Health',
+    history: 'История рутин',
+    leaderboard: 'Лидерборд',
     wishlists: 'Желания'
 };
 
@@ -89,6 +93,8 @@ export const HouseholdDashboard = ({ data, actions }: { data: AppData; actions: 
         routines: <RoutinesWidget data={data} actions={actions} />,
         'day-pulse': <DayPulseWidget data={data} />,
         'house-health': <HouseHealthWidget data={data} />,
+        history: <RoutineHistoryWidget data={data} />,
+        leaderboard: <LeaderboardWidget data={data} />,
         wishlists: <WishlistWidget data={data} actions={actions} />
     };
 
@@ -317,6 +323,69 @@ const HouseHealthWidget = ({ data }: { data: AppData }) => {
                         ))}
                     </div>
                 )}
+            </Panel>
+        </div>
+    );
+};
+
+const RoutineHistoryWidget = ({ data }: { data: AppData }) => {
+    const scope = data.dashboardPreferences?.scope || 'FAMILY';
+    const visibleRoutineIds = new Set((data.routines || [])
+        .filter(routine => routine.visibility === scope)
+        .map(routine => routine.id));
+    const events = [...(data.routineEvents || [])]
+        .filter(event => visibleRoutineIds.has(event.routineId) && ['COMPLETED', 'SKIPPED', 'UNIT_RECORDED'].includes(event.type))
+        .sort((left, right) => right.timestamp - left.timestamp)
+        .slice(0, 6);
+    const timezone = data.family?.settings.timezone || 'UTC';
+    return (
+        <div>
+            <SectionHeader title="История рутин" />
+            <Panel className="mt-3 overflow-hidden">
+                {events.length === 0 ? <div className="p-5 text-center text-sm text-gray-400">История пока пуста.</div> : events.map(event => {
+                    const routine = data.routines?.find(item => item.id === event.routineId);
+                    const actor = data.members.find(member => member.id === event.actorId);
+                    const detail = event.type === 'COMPLETED'
+                        ? `Выполнено${event.xpAwarded ? ` · +${event.xpAwarded} XP` : ''}`
+                        : event.type === 'SKIPPED'
+                            ? 'Пропущено'
+                            : `Накоплено +${event.units || 1}`;
+                    return (
+                        <div key={event.id} className="flex items-center gap-3 border-b border-black/5 p-3 last:border-0">
+                            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-violet-50 text-violet-600"><History size={17} /></div>
+                            <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-bold">{routine?.title || 'Рутина'}</div>
+                                <div className="truncate text-[11px] text-gray-400">{detail}{actor ? ` · ${actor.name}` : ''}</div>
+                            </div>
+                            <time className="shrink-0 text-[10px] text-gray-400" dateTime={new Date(event.timestamp).toISOString()}>
+                                {new Intl.DateTimeFormat('ru-RU', { timeZone: timezone, day: '2-digit', month: '2-digit' }).format(event.timestamp)}
+                            </time>
+                        </div>
+                    );
+                })}
+            </Panel>
+        </div>
+    );
+};
+
+const LeaderboardWidget = ({ data }: { data: AppData }) => {
+    const members = [...data.members]
+        .filter(member => member.isActive !== false)
+        .sort((left, right) => right.xp - left.xp || left.name.localeCompare(right.name, 'ru'));
+    return (
+        <div>
+            <SectionHeader title="Лидерборд" />
+            <Panel className="mt-3 overflow-hidden">
+                {members.map((member, index) => (
+                    <div key={member.id} className="flex items-center gap-3 border-b border-black/5 p-3 last:border-0">
+                        <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-sm font-black ${index === 0 ? 'bg-amber-100 text-amber-700' : 'bg-black/[0.035] text-gray-500'}`}>
+                            {index === 0 ? <Medal size={18} /> : index + 1}
+                        </div>
+                        <span className="text-xl" aria-hidden="true">{member.avatar}</span>
+                        <div className="min-w-0 flex-1 truncate text-sm font-bold">{member.name}</div>
+                        <div className="shrink-0 text-right"><div className="text-sm font-black">{member.xp} XP</div><div className="text-[10px] text-gray-400">уровень {member.level}</div></div>
+                    </div>
+                ))}
             </Panel>
         </div>
     );
