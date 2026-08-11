@@ -1,0 +1,64 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — data-safe staged deployment
+footer Rollback may restore the snapshot only before clients are reopened
+
+actor "Operator" as operator
+control "Release gate" as gate
+participant "Current writer + tunnel/bots" as current
+database "0600 snapshots" as snapshots
+participant "Candidate on isolated copy" as candidate
+
+activate operator
+operator -> gate : release candidate + maintenance acknowledgement
+activate gate
+gate -> current : read image ID, health, revision, invariants
+activate current
+current --> gate : production baseline
+deactivate current
+gate -> snapshots : snapshot + logical row hashes
+activate snapshots
+snapshots --> gate : immutable baseline copy
+deactivate snapshots
+gate -> candidate : migrate restored copy; run health/data audit
+activate candidate
+candidate --> gate : candidate report; existing counts never decrease
+deactivate candidate
+
+gate -> current : close tunnel/bots; stop the only writer
+activate current
+current --> gate : write traffic quiesced
+deactivate current
+gate -> snapshots : create final snapshot
+activate snapshots
+snapshots --> gate : final rollback point
+deactivate snapshots
+gate -> candidate : start on production volume; authenticated smoke
+activate candidate
+candidate --> gate : health + revision + invariants
+deactivate candidate
+
+alt green before reopening clients
+  gate -> current : open tunnel/bots for candidate
+  activate current
+  current --> gate : traffic resumed
+  deactivate current
+  gate --> operator : release accepted; observe at least 24 h
+else failed before reopening clients
+  gate -> snapshots : restore final snapshot
+  activate snapshots
+  snapshots --> gate : previous database restored
+  deactivate snapshots
+  gate -> current : start previous image; verify; reopen
+  activate current
+  current --> gate : previous release healthy
+  deactivate current
+  gate --> operator : rollback completed
+end
+
+deactivate gate
+deactivate operator
+@enduml

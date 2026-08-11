@@ -1,0 +1,54 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — local barcode capture and purchase draft
+footer Contract: video stays on device; every purchase is reviewed before confirm
+
+actor "Family member" as actor
+boundary "Barcode UI" as ui
+control "BarcodeDetector / lazy ZXing" as scanner
+boundary "HTTP API" as api
+control "Purchase import domain" as purchase
+database "SQLite aggregate + receipts" as db
+
+activate actor
+actor -> ui : scan camera frame or image file
+activate ui
+ui -> scanner : decode locally
+activate scanner
+scanner --> ui : GTIN candidate
+deactivate scanner
+ui -> ui : verify checksum; request name once if unknown
+ui -> api : POST /api/purchase-imports/{id}/barcodes\n{revision, mutationId, barcode, name?, quantity}
+activate api
+api -> purchase : resolve family product or create draft item
+activate purchase
+purchase -> purchase : repeated barcode increments same item
+purchase --> api : reviewed draft
+deactivate purchase
+api -> db : commit purchase import + mutation receipt
+activate db
+db --> api : new revision
+deactivate db
+api --> ui : authoritative family state
+deactivate api
+
+actor -> ui : choose account/total and confirm
+ui -> api : POST /api/purchase-imports/{id}/confirm
+activate api
+api -> purchase : atomic confirm contract
+activate purchase
+purchase --> api : expense? + pantry movements + shopping matches
+deactivate purchase
+api -> db : one transaction + idempotent result
+activate db
+db --> api : committed result
+deactivate db
+api --> ui : expense and stock recorded once
+deactivate api
+ui --> actor : purchase accounted
+deactivate ui
+deactivate actor
+@enduml

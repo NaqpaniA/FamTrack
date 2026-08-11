@@ -1,0 +1,45 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — scheduled routine completion and XP
+footer Contract: one occurrence key is rewarded once; next date comes from schedule
+
+actor "Family member" as actor
+boundary "Routine UI" as ui
+boundary "HTTP API" as api
+control "Routine domain" as routine
+database "SQLite aggregate + receipts" as db
+
+activate actor
+actor -> ui : complete scheduled occurrence
+activate ui
+ui -> api : POST /api/routines/complete\n{revision, mutationId, routineId, taskId}
+activate api
+api -> db : lookup mutation receipt + current aggregate
+activate db
+db --> api : exact duplicate | current template/task/member
+deactivate db
+
+alt exact duplicate
+  api --> ui : current state; duplicate=true; no XP
+else new command
+  api -> routine : validate RBAC, open task and occurrence key
+  activate routine
+  routine -> routine : base XP = difficulty × priority\non-time in template timezone?\nstreak + milestone bonus
+  routine -> routine : next occurrence from schedule\n(no missed-period backlog)
+  routine --> api : task DONE + event + successor + XP delta
+  deactivate routine
+  api -> db : one transaction: member/reward log/task/\ntemplate/events/receipt/revision
+  activate db
+  db --> api : committed authoritative state
+  deactivate db
+  api --> ui : state + awarded XP/streak
+end
+
+deactivate api
+ui --> actor : completed occurrence and next focus
+deactivate ui
+deactivate actor
+@enduml

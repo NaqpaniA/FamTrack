@@ -1,0 +1,57 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — durable outbox replay
+footer Contract: exact {revision, mutationId, payload|Blob} remains until matching acknowledgement
+
+actor "Family member" as actor
+boundary "Mini App UI" as ui
+database "IndexedDB outbox" as outbox
+boundary "HTTP API" as api
+database "SQLite + mutation receipts" as db
+collections "Atomic DB file" as disk
+
+activate actor
+actor -> ui : foreground / reconnect
+activate ui
+ui -> outbox : list commands ordered by createdAt
+activate outbox
+outbox --> ui : exact pending envelopes and optional Blobs
+deactivate outbox
+
+loop each command in order
+  ui -> api : POST route\nexact revision + mutationId + payload/bytes
+  activate api
+  api -> db : lookup (familyId, mutationId)
+  activate db
+  db --> api : none | exact receipt | conflicting reuse
+  deactivate db
+  alt exact duplicate
+    api -> db : read current actor-filtered aggregate
+    activate db
+    db --> api : current revision + state
+    deactivate db
+  else new command
+    api -> db : BEGIN; apply route-scoped mutator;\ninsert receipt; increment revision; COMMIT
+    activate db
+    db -> disk : fsync temporary export + atomic rename
+    activate disk
+    disk --> db : durable
+    deactivate disk
+    db --> api : authoritative state + rebased flag
+    deactivate db
+  end
+  api --> ui : 200 + same command.mutationId
+  deactivate api
+  ui -> outbox : delete acknowledged mutationId
+  activate outbox
+  outbox --> ui : removed
+  deactivate outbox
+end
+
+ui --> actor : «Сохранено» + authoritative state
+deactivate ui
+deactivate actor
+@enduml

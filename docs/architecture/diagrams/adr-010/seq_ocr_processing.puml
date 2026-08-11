@@ -1,0 +1,79 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — persisted receipt OCR processing
+footer Contract: provider call is outside SQLite transaction; queue concurrency is one
+
+actor "Family member" as actor
+boundary "Receipt review UI + outbox" as ui
+boundary "FamTrack HTTP API" as api
+collections "/data/imports (0600)" as files
+queue "Persisted serial queue" as queue
+participant "receipt-ocr sidecar" as ocr
+control "Deterministic parser" as parser
+database "SQLite purchase job" as db
+
+activate actor
+actor -> ui : select 1–3 JPEG/PNG pages
+activate ui
+ui -> api : binary POST /files/{page}\nrevision + mutationId + SHA-256
+activate api
+api -> api : validate auth/RBAC, 12 MiB total, 40 MP, signature
+api -> files : fsync temp + atomic rename
+activate files
+files --> api : stored path
+deactivate files
+api -> db : commit UPLOADED metadata + receipt
+activate db
+db --> api : acknowledged mutationId
+deactivate db
+api --> ui : upload acknowledged
+deactivate api
+
+ui -> api : POST /process {revision, mutationId}
+activate api
+api -> db : commit QUEUED
+activate db
+db --> api : new revision
+deactivate db
+api -> queue : enqueue family/import key
+activate queue
+api --> ui : queued
+deactivate api
+
+queue -> db : short transaction: QUEUED → PROCESSING
+activate db
+db --> queue : committed job + file metadata
+deactivate db
+queue -> files : read page bytes
+activate files
+files --> queue : binary image
+deactivate files
+queue -> ocr : multipart page (outside DB transaction)
+activate ocr
+ocr --> queue : QR + normalized OCR blocks | retryable/final error
+deactivate ocr
+queue -> parser : deterministic merchant/date/total/items/matches
+activate parser
+parser --> queue : review draft
+deactivate parser
+queue -> db : short transaction: REVIEW_REQUIRED\n(or FAILED_RETRYABLE/FAILED_FINAL)
+activate db
+db --> queue : persisted status
+deactivate db
+deactivate queue
+
+ui -> api : GET job summary / OCR blocks
+activate api
+api -> db : actor-filtered read (no internal path)
+activate db
+db --> api : review data
+deactivate db
+api --> ui : status and items
+deactivate api
+ui --> actor : manual review required; no finance effect yet
+deactivate ui
+deactivate actor
+@enduml

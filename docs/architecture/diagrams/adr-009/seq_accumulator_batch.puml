@@ -1,0 +1,48 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — accumulator record and bounded batch completion
+footer Contract: accumulated/rewarded units prevent double XP
+
+actor "Family member" as actor
+boundary "Household UI" as ui
+boundary "HTTP API" as api
+control "Routine domain" as routine
+database "SQLite aggregate + receipts" as db
+
+activate actor
+actor -> ui : +1 accumulated unit
+activate ui
+ui -> api : POST /api/routines/record-unit\n{revision, mutationId, routineId, units}
+activate api
+api -> routine : validate accumulator, pause and visibility
+activate routine
+routine --> api : accumulatedUnits += bounded units\nUNIT_RECORDED event
+deactivate routine
+api -> db : commit template/task/event/receipt
+activate db
+db --> api : new revision
+deactivate db
+api --> ui : authoritative accumulated count
+deactivate api
+
+actor -> ui : complete batch of N units
+ui -> api : POST /api/routines/complete\n{revision, mutationId, routineId, units:N}
+activate api
+api -> routine : clamp 1..accumulatedUnits; select active assignee
+activate routine
+routine -> routine : award base XP × N once\n+ one streak milestone bonus
+routine --> api : remaining units + rewardedUnits + COMPLETED event
+deactivate routine
+api -> db : atomic member/reward/task/template/event/receipt
+activate db
+db --> api : committed state
+deactivate db
+api --> ui : remaining units + XP
+deactivate api
+ui --> actor : batch accounted
+deactivate ui
+deactivate actor
+@enduml

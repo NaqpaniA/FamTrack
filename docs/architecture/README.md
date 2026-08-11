@@ -11,7 +11,7 @@
 ## Трассировка
 
 Базовый пакет диаграмм датирован `2026-06-28`; схемы,
-затронутые ADR 006/007, актуализированы `2026-08-11`. Пакет построен по:
+затронутые ADR 006–010, актуализированы `2026-08-11`. Пакет построен по:
 
 - `FamTrack@768af344db91`
 - Текущему worktree, включая незакоммиченные изменения на момент генерации
@@ -31,6 +31,9 @@
 | `diagrams/activities-end-to-end.puml` | Activity-схемы сквозных пользовательских процессов | FamTrack | `768af344db91` | 2026-06-28 |
 | [low-level-design.md](low-level-design.md) | Подробный LLD по подсистемам и контрактам | FamTrack | current worktree | 2026-08-10 |
 | [ADR 007](007_concurrent_sync_and_xp.md) | Concurrent sync, idempotent commands, XP policy и data-safe deploy | FamTrack + pers-infra | current worktree | 2026-08-11 |
+| [ADR 008](008_durable_writes_and_outbox.md) | Durable IndexedDB outbox, binary replay, ETag и route-scoped writes | FamTrack | current worktree | 2026-08-11 |
+| [ADR 009](009_routine_engine.md) | Routine schedules, accumulator batches, history, XP и streak | FamTrack | current worktree | 2026-08-11 |
+| [ADR 010](010_purchase_capture.md) | Pantry, local barcodes, receipt OCR и atomic expense + stock confirm | FamTrack | current worktree | 2026-08-11 |
 
 Production-readiness delta от `2026-08-10` описан в
 [ADR 006](006_production_readiness.md). Он фиксирует обязательную серверную загрузку,
@@ -38,6 +41,10 @@ Production-readiness delta от `2026-08-10` описан в
 Concurrent family delta от `2026-08-11` описан в
 [ADR 007](007_concurrent_sync_and_xp.md): автоматический refresh, intent-команды
 с persisted idempotency, server-owned XP и проверяемый deploy/rollback.
+Durable delivery и scoped persistence уточняет
+[ADR 008](008_durable_writes_and_outbox.md), routine/Household Pulse —
+[ADR 009](009_routine_engine.md), а bounded context «Запасы» и импорт чеков с
+финансовым расходом — [ADR 010](010_purchase_capture.md).
 
 ## Краткая архитектурная картина
 
@@ -69,6 +76,10 @@ Frontend отвечает за UX, навигацию, optimistic updates и Tel
   подписки и фиксированные платежи.
 - **Геймификация:** награды, журнал XP, инвентарь.
 - **Совместная работа:** список покупок, заметки, activity feed.
+- **Household operations:** scheduled/accumulator routines, streaks, House Health,
+  dashboard preferences и wishlist.
+- **Запасы и покупки:** pantry ledger, local barcode capture, purchase drafts и
+  receipt OCR с атомарным финансовым confirm.
 - **Интеграции:** семейный Telegram-бот, MCP bridge, internal metrics collector.
 - **Эксплуатация:** проверки работоспособности, агрегированные метрики, backup перед миграцией,
   migration validation.

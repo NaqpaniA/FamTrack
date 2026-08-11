@@ -1,0 +1,49 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — atomic receipt confirm: expense plus pantry
+footer Contract: one financial expense, one balance debit, selected pantry/shopping effects
+
+actor "Family member / parent" as actor
+boundary "Review UI" as ui
+boundary "HTTP API" as api
+control "Purchase import domain" as purchase
+database "SQLite family aggregate" as db
+
+activate actor
+actor -> ui : confirm reviewed items, account, total, stockOnly
+activate ui
+ui -> api : POST /api/purchase-imports/{id}/confirm\n{revision, mutationId}
+activate api
+api -> db : read mutation receipt + current import/actor
+activate db
+db --> api : duplicate receipt | current draft
+deactivate db
+
+alt already CONFIRMED or exact duplicate
+  api -> db : read stored confirmedResult and current state
+  activate db
+  db --> api : previous transaction/movement/shopping IDs
+  deactivate db
+  api --> ui : same result; no revision/balance change
+else new confirm
+  api -> purchase : validate ownership, review and CHILD stock-only rule
+  activate purchase
+  purchase -> purchase : create one EXPENSE transaction unless stockOnly\ndebit selected account once
+  purchase -> purchase : create PURCHASE movements for selected pantry items\nclose only selected shopping matches\nappend activity event
+  purchase --> api : confirmed import + stable result IDs
+  deactivate purchase
+  api -> db : BEGIN; accounts + goals + transactions +\npantry ledger + shopping + event + import + receipt
+  activate db
+  db --> api : COMMIT and one new revision
+  deactivate db
+  api --> ui : authoritative expense and pantry state
+end
+
+deactivate api
+ui --> actor : «Расход и запасы записаны»
+deactivate ui
+deactivate actor
+@enduml
