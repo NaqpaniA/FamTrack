@@ -1,0 +1,20 @@
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam BackgroundColor #FFFFFF
+skinparam ArrowColor #475569
+skinparam sequence {
+  LifeLineBorderColor #94A3B8
+  LifeLineBackgroundColor #F8FAFC
+  ParticipantBorderColor #64748B
+  ParticipantBackgroundColor #F8FAFC
+  ParticipantFontColor #0F172A
+  ActorBorderColor #64748B
+  ActorBackgroundColor #FFFFFF
+  ActorFontColor #0F172A
+  GroupBorderColor #CBD5E1
+  GroupBackgroundColor #F8FAFC
+  GroupFontColor #334155
+  DividerBackgroundColor #E2E8F0
+  DividerBorderColor #CBD5E1
+  DividerFontColor #0F172A
+}

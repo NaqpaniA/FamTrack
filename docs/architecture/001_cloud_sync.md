@@ -31,7 +31,7 @@ Edge Functions. Это решение остаётся историческим 
 - Multi-family tenant model через `families` и `family_id`.
 - Optimistic concurrency через `families.revision`.
 - Role-based filtering и write checks на backend.
-- Telegram agent и MCP bridge ходят через тот же HTTP API.
+- Семейный Telegram-бот и MCP bridge ходят через тот же HTTP API.
 
 ## 3. Причина отклонения Supabase-варианта
 
@@ -76,4 +76,3 @@ Supabase остаётся допустимым future option, но текущи�
 - `diagrams/data-flows.puml`
 - `diagrams/data-lifecycle.puml`
 - `diagrams/security-rbac.puml`
-

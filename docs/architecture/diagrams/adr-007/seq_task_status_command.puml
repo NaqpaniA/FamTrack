@@ -1,0 +1,99 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+  $B("POST /api/tasks/status")
+  $SM($MUTED("Concurrent-safe status change with persisted idempotency"))
+end title
+footer $SM($MUTED("Task status command / source of truth: tasks + members + mutation_receipts"))
+
+box "User / browser" $L_USER
+  actor "Family member" as member
+  boundary "Task UI" as ui <<p_chg>>
+  control "Client request queue" as queue <<p_new>>
+end box
+
+box "API / domain" $L_API
+  boundary "FamTrack HTTP API" as api <<p_chg>>
+  control "Task command" as command <<p_chg>>
+end box
+
+box "State" $L_DATA
+  database "SQLite aggregate + receipts" as db <<p_chg>>
+  collections "Atomic DB file" as file <<p_chg>>
+end box
+
+activate member
+member -[$C_CHG]> ui : check task or drag card(taskId, desiredStatus)
+activate ui
+  ui -[$C_NEW]> queue : enqueue POST(revision, mutationId, taskId, status, beforeTaskId?)
+  activate queue
+    queue -[$C_NEW]> api : POST /api/tasks/status(CommandEnvelope)
+    activate api
+      api -[$C_CHG]> api : validate Telegram actor + command envelope
+      api -[$C_NEW]> db : find receipt(familyId, mutationId)
+      activate db
+        db --[$C_NEW]> api : none | exact duplicate | conflicting reuse
+      deactivate db
+
+      break#$FR_CRIT_HEAD #$FR_CRIT_BG invalid authentication/envelope or conflicting mutationId
+        api --[$C_NEW]> queue : 400/401 error | 409 IDEMPOTENCY_CONFLICT
+        queue --[$C_NEW]> ui : command failed(requestId, message)
+        ui --[$C_CHG]> member : restore confirmed state + show error
+      end
+
+      alt#$FR_INFO_HEAD #$FR_INFO_BG exact duplicate receipt
+        api -[$C_NEW]> db : read current actor-filterable aggregate
+        activate db
+          db --[$C_NEW]> api : current ApiEnvelope
+        deactivate db
+      else #$FR_INFO_BG new command; base revision may be stale
+        api -[$C_CHG]> command : apply to current aggregate(command, actor)
+        activate command
+          command -[$C_CHG]> db : BEGIN; read current task/settings/members
+          activate db
+            db --[$C_CHG]> command : current aggregate
+          deactivate db
+          command -[$C_CHG]> command : validate current RBAC/domain policy
+          break#$FR_CRIT_HEAD #$FR_CRIT_BG forbidden or invalid current command
+            command --[$C_CHG]> api : 400/403 domain error
+            api --[$C_NEW]> queue : command failed(requestId, message)
+            queue --[$C_NEW]> ui : restore confirmed state
+            ui --[$C_CHG]> member : show domain error
+          end
+          command -[$C_CHG]> db : set status/order; award XP once via rewardedAt
+          activate db
+            db -[$C_NEW]> db : insert receipt + increment revision + COMMIT
+            db --[$C_CHG]> command : committed ApiEnvelope(rebased?)
+          deactivate db
+          command -[$C_CHG]> file : fsync temp + atomic rename
+          activate file
+            file --[$C_CHG]> command : durable | I/O error
+          deactivate file
+          command --[$C_CHG]> api : CommandResult(envelope, rebased)
+        deactivate command
+      end
+
+      break#$FR_CRIT_HEAD #$FR_CRIT_BG atomic persist failed
+        api -[$C_NEW]> db : restore pre-command in-memory snapshot
+        activate db
+          db --[$C_NEW]> api : previous revision restored
+        deactivate db
+        api --[$C_NEW]> queue : 500 Internal error(requestId)
+        queue --[$C_NEW]> ui : command failed
+        ui --[$C_CHG]> member : keep confirmed state + show retry message
+      end
+
+      api --[$C_NEW]> queue : 200 ApiEnvelope + CommandMeta(duplicate, rebased)
+    deactivate api
+    queue --[$C_NEW]> ui : authoritative family state
+  deactivate queue
+  ui -[$C_NEW]> ui : replace optimistic cache
+  ui --[$C_NEW]> member : updated board and XP
+deactivate ui
+deactivate member
+
+SEQ_LEGEND_STATUS()
+@enduml

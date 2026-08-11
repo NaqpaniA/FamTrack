@@ -1,0 +1,70 @@
+@startuml
+!include _style_seq.puml
+
+title
+  $B("Telegram avatar with a private Bot API fallback")
+  $SM($MUTED("The browser never receives TELEGRAM_BOT_TOKEN or a Telegram file URL containing it"))
+end title
+footer $SM($MUTED("Public operation: GET /api/users/{userId}/avatar with Telegram initData header"))
+
+actor Member
+participant "FamTrack App" as App
+participant "FamTrack API" as API
+database "FamTrack DB" as DB
+participant "Telegram Bot API" as TG
+
+activate Member
+Member -> App : Open Mini App
+activate App
+App -> API : GET /api/app-data\nX-Telegram-Init-Data
+activate API
+API -> DB : Resolve actor and sync signed photo_url
+activate DB
+DB --> API : Visible family state
+deactivate DB
+API --> App : AppData with HTTPS avatarUrl when available
+deactivate API
+
+alt signed photo_url loads
+  App -> App : Render direct HTTPS image
+else photo_url missing or image failed
+  App -> API : GET /api/users/{userId}/avatar\nX-Telegram-Init-Data
+  activate API
+  API -> DB : Authorize target user in actor family
+  activate DB
+  DB --> API : telegramId or not found
+  deactivate DB
+  alt target is visible and has telegramId
+    API -> TG : getUserProfilePhotos(user_id, limit=1)
+    activate TG
+    TG --> API : largest photo file_id or empty
+    deactivate TG
+    alt photo exists
+      API -> TG : getFile(file_id), then fetch file bytes
+      activate TG
+      TG --> API : safe raster bytes
+      deactivate TG
+      API --> App : 200 image/*, private cache
+      App -> App : Create object URL and render image
+    else privacy settings or no photo
+      API --> App : 404 no avatar
+      App -> App : Keep deterministic emoji fallback
+    end
+  else cross-family, inactive or unlinked target
+    API --> App : 404 without identity disclosure
+    App -> App : Keep deterministic emoji fallback
+  end
+  deactivate API
+end
+
+App --> Member : Avatar or emoji fallback
+deactivate App
+deactivate Member
+
+legend bottom right
+  |= Цвет |= Значение |
+  |<#EAF4FF> | Telegram integration |
+  |<#ECFDF3> | persisted family identity |
+  |<#FFF8E1> | privacy and fallback branch |
+endlegend
+@enduml

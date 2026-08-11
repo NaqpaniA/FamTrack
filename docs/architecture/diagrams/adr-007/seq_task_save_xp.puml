@@ -1,0 +1,76 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+  $B("POST /api/tasks/save")
+  $SM($MUTED("Server-authoritative XP from difficulty and priority"))
+end title
+footer $SM($MUTED("Task save / XP matrix is backend source of truth / mutationId idempotency"))
+
+box "User / browser" $L_USER
+  actor "Family member" as member
+  boundary "Task editor" as ui <<p_chg>>
+end box
+
+box "API / domain" $L_API
+  boundary "FamTrack HTTP API" as api <<p_chg>>
+  control "Task normalizer + XP policy" as task_domain <<p_chg>>
+end box
+
+box "State" $L_DATA
+  database "SQLite tasks + receipts" as db <<p_chg>>
+end box
+
+activate member
+member -[$C_NEW]> ui : choose difficulty + priority; save
+activate ui
+  ui -[$C_CHG]> api : POST /api/tasks/save\n{revision, mutationId, task{difficulty, priority, ...}}
+  activate api
+    api -[$C_CHG]> api : validate Telegram actor + command envelope
+    api -[$C_NEW]> db : find receipt(familyId, mutationId)
+    activate db
+      db --[$C_NEW]> api : none | exact duplicate | conflicting reuse
+    deactivate db
+    break#$FR_CRIT_HEAD #$FR_CRIT_BG invalid envelope or conflicting mutationId
+      api --[$C_CHG]> ui : 400/409 error(requestId)
+      ui --[$C_CHG]> member : keep draft + explain failure
+    end
+
+    alt#$FR_INFO_HEAD #$FR_INFO_BG exact duplicate receipt
+      api -[$C_NEW]> db : read current authoritative family state
+      activate db
+        db --[$C_NEW]> api : current ApiEnvelope
+      deactivate db
+    else #$FR_INFO_BG new command; base revision may be stale
+      api -[$C_NEW]> db : BEGIN; read current aggregate
+      activate db
+        db --[$C_NEW]> api : current task and family state
+      deactivate db
+      api -[$C_CHG]> task_domain : assert current RBAC + normalizeTaskForSave(input, actor)
+      activate task_domain
+        task_domain -[$C_NEW]> task_domain : calculateTaskXp(difficulty, priority)\nEASY 15/20/25; MEDIUM 30/40/50; HARD 55/70/90
+        note right of task_domain
+          Client-provided points is ignored.
+          Existing completion metadata is preserved.
+        end note
+        task_domain --[$C_NEW]> api : normalized Task(points from matrix)
+      deactivate task_domain
+      break#$FR_CRIT_HEAD #$FR_CRIT_BG invalid task or forbidden actor
+        api --[$C_CHG]> ui : 400/403 error(requestId)
+        ui --[$C_CHG]> member : keep draft + explain failure
+      end
+      api -[$C_NEW]> db : upsert task + receipt; increment revision; COMMIT
+      activate db
+        db --[$C_NEW]> api : ApiEnvelope + CommandMeta(rebased?)
+      deactivate db
+    end
+    api --[$C_NEW]> ui : 200 authoritative task points + family state
+  deactivate api
+  ui --[$C_NEW]> member : show calculated XP on card/editor
+deactivate ui
+deactivate member
+
+SEQ_LEGEND_STATUS()
+@enduml

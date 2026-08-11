@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - LLD компонентов
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-10
+Источник: текущий worktree после ADR 006
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -23,7 +23,6 @@ package "Browser Mini App" as Browser #E0F2FE {
   [ServerAdapter\n`api.ts`\nrevision-aware API client] as ApiAdapter
   [Domain models\n`*.model.ts`, `types.ts`] as Models
   [Telegram WebApp utils\n`utils.ts`] as TwaUtils
-  [LocalDatabase\nlocalStorage dev fallback] as LocalDb
 }
 
 package "HTTP Backend" as Server #EDE9FE {
@@ -43,7 +42,7 @@ package "Persistence" as Persistence #FFF7ED {
 }
 
 package "Integrations" as Integrations #DCFCE7 {
-  [Telegram Agent\n`agent/famtrack_agent.py`] as Agent
+  [Семейный Telegram-бот\n`agent/famtrack_agent.py`\nбез Codex subprocess] as FamilyBot
   [MCP Bridge\n`mcp/famtrack_mcp.py`] as Mcp
   [Telegram Bot API] as TelegramApi
   [Internal collector] as Collector
@@ -53,7 +52,6 @@ Screens --> Store : пользовательские действия
 Store --> Queries : mutate/invalidate
 Queries --> ApiAdapter : loadData/write
 ApiAdapter --> Router : HTTP JSON
-ApiAdapter ..> LocalDb : только localhost fallback
 
 Screens --> Models : typed props
 Store --> Models : доменная логика UI layer
@@ -70,8 +68,8 @@ Database --> Migrations : open-time migration
 Database --> RowMappers : rowTo* and insert*
 Database --> SqliteFile : export/persist bytes
 
-Agent <--> TelegramApi : long polling
-Agent --> Router : API reads/writes
+FamilyBot <--> TelegramApi : long polling
+FamilyBot --> Router : API reads/writes + reminders
 Mcp --> Router : tool reads/writes
 Collector --> Router : internal metrics
 
@@ -79,8 +77,7 @@ legend bottom
   1. Browser формирует UX и optimistic cache.
   2. Backend является enforcement layer.
   3. Persistence хранит family-scoped aggregate.
-  4. Agent и MCP не обходят API/RBAC.
+  4. Семейный бот и MCP не обходят API/RBAC.
 endlegend
 
 @enduml
-

@@ -1,0 +1,69 @@
+@startuml
+!pragma teoz true
+!include _style_product_seq.puml
+title Dispatch one due task reminder
+autonumber
+
+control "Family bot reminder scheduler" as Bot
+boundary "Internal reminders API" as API
+control "Privacy resolver" as Privacy
+database "FamTrack SQLite" as DB
+database "Bot chat + delivery state" as State
+actor "Telegram Bot API" as Telegram
+
+activate Bot
+Bot -> API: GET /api/internal/reminders/due\ninternal secret
+activate API
+API -> DB: read due unfinished tasks + settings + members
+activate DB
+DB --> API: reminder candidates
+deactivate DB
+API --> Bot: policy inputs (no client authority)
+deactivate API
+Bot -> Privacy: resolve candidate destinations
+activate Privacy
+
+alt task.visibleTo is non-empty
+  Privacy -> Privacy: private-only recipients\nnever select group chat
+else public task
+  Privacy -> Privacy: apply task override or family mode
+end
+Privacy --> Bot: allowed private/group destinations
+deactivate Privacy
+
+loop each allowed destination
+  Bot -> State: check delivery key(task, dueAt, chat)
+  activate State
+  alt already delivered
+    State --> Bot: skip duplicate
+  else first delivery
+    State --> Bot: send allowed
+    deactivate State
+    Bot -> Telegram: sendMessage(chatId, reminder)
+    activate Telegram
+    alt Telegram accepted
+      Telegram --> Bot: message id
+    else transient Telegram error
+      Telegram --> Bot: retryable error
+    end
+    deactivate Telegram
+    alt Telegram accepted
+      Bot -> State: persist delivered key
+      activate State
+      State --> Bot: saved
+      deactivate State
+    else transient Telegram error
+      Bot -> State: persist attempt/error only
+      activate State
+      State --> Bot: retry remains possible
+      deactivate State
+    end
+  end
+end
+
+note over Privacy,Telegram
+Missing private/group registration is a measured skip.
+It never widens privacy to another destination.
+end note
+deactivate Bot
+@enduml

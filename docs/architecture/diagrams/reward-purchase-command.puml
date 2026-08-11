@@ -1,0 +1,47 @@
+@startuml
+!pragma teoz true
+!include _style_product_seq.puml
+title Purchase a family reward
+autonumber
+
+actor Member
+boundary "Reward shop UI" as UI
+boundary "POST /api/rewards/purchase" as API
+control "Reward command" as Command
+database "SQLite" as DB
+
+activate Member
+Member -> UI: Buy reward
+activate UI
+UI -> API: {revision, rewardId}
+activate API
+API -> Command: purchase(actor, rewardId)
+activate Command
+Command -> DB: BEGIN IMMEDIATE + load actor/reward
+activate DB
+DB --> Command: trusted reward + actor XP or validation result
+deactivate DB
+
+alt valid active reward and sufficient XP
+  Command -> DB: apply purchase transaction
+  activate DB
+  DB -> DB: subtract actor XP\ncreate inventory item\nappend SPENT log + event\nincrement revision + COMMIT
+  DB --> Command: authoritative envelope
+  deactivate DB
+else reward inactive/missing or XP insufficient
+  Command -> Command: build typed rejection\n(no state change)
+end
+Command --> API: success envelope or typed rejection
+deactivate Command
+
+alt purchase committed
+  API --> UI: 200 + new revision
+  UI --> Member: Item in backpack
+else reward unavailable / insufficient XP
+  API --> UI: 404/409
+  UI --> Member: Explain rejection
+end
+deactivate API
+deactivate UI
+deactivate Member
+@enduml

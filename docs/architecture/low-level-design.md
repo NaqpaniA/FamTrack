@@ -1,7 +1,7 @@
 # Низкоуровневый дизайн FamTrack
 
-Дата: `2026-06-28`
-Источник: `FamTrack@768af344db91`
+Дата: `2026-08-11`
+Источник: текущий worktree после ADR 007
 Примечание: документ построен по текущему worktree, включая незакоммиченные изменения.
 
 ## 1. Назначение документа
@@ -21,10 +21,11 @@ FamTrack имеет три активных runtime-слоя:
 | --- | --- | --- |
 | Browser Mini App | `index.tsx`, `store.ts`, `queries.ts`, `api.ts`, `*.ui.tsx`, `*.model.ts` | Экранные состояния, Telegram Web App UX, optimistic cache, формирование доменных update payload |
 | HTTP backend | `server/index.ts`, `server/auth.ts`, `server/rbac.ts`, `server/database.ts` | AuthN/AuthZ, HTTP routing, нормализация, мутации, SQLite persistence, metrics |
-| Tool integrations | `agent/famtrack_agent.py`, `mcp/famtrack_mcp.py` | Telegram bot commands, MCP tools, API access через тот же backend |
+| Tool integrations | `agent/famtrack_agent.py`, `mcp/famtrack_mcp.py` | Семейные bot-команды/напоминания, MCP tools, API access через тот же backend |
 
-Backend является authoritative writer. Browser fallback в localStorage нужен
-только для локальной разработки, когда API недоступен на localhost.
+Backend является единственным authoritative writer. Клиент не подставляет demo
+или localStorage state при ошибке API: до успешного `GET /api/app-data` полезные
+экраны не отображаются.
 
 ## 3. Frontend LLD
 
@@ -36,21 +37,26 @@ events. React Query хранит серверное состояние в cache 
 
 Главные элементы:
 
-- `useFamilyData()` загружает `api.loadData()` и отдаёт `INITIAL_DATA` как
-  initial placeholder.
+- `useFamilyData()` загружает `api.loadData()` без `initialData`/demo placeholder
+  и перечитывает aggregate каждые 4 секунды, при focus и reconnect.
 - `useMutations()` содержит mutation wrappers и optimistic update правила.
 - `useAppStore()` собирает screen-level actions и доменную логику, например
   завершение задачи, покупку награды, оплату подписки или checkout покупок.
-- `ServerAdapter` хранит `latestRevision` и добавляет её в write requests.
+- `ServerAdapter` хранит `latestRevision`, последовательно выполняет GET/POST в
+  одной очереди и добавляет к команде стабильный `mutationId`.
 
 ### 3.2. Поток записи на клиенте
 
 1. Пользователь выполняет действие на экране.
-2. `useAppStore()` создаёт точечный payload или compound `Partial<AppData>`.
+2. `useAppStore()` создаёт payload доменной intent-команды; frontend не
+   отправляет snapshots коллекций через legacy batch.
 3. `useMutations()` при необходимости применяет optimistic update.
-4. `ServerAdapter` отправляет POST с `{ revision, ...body }`.
-5. Backend возвращает новый `{ revision, data }`.
-6. Query invalidation подтягивает server-authoritative state.
+4. `ServerAdapter` отправляет POST с `{ revision, mutationId, ...body }` и при
+   сетевом/5xx сбое один раз повторяет тот же exact command envelope.
+5. Backend возвращает `{ revision, data, command }`; duplicate не применяет
+   эффект второй раз, stale base revision безопасно rebased на current state.
+6. Точный server response заменяет optimistic cache, после чего invalidation и
+   periodic polling поддерживают его актуальность.
 7. При ошибке optimistic cache откатывается, если mutation сохранила snapshot.
 
 ### 3.3. Клиентские ограничения
@@ -73,26 +79,39 @@ events. React Query хранит серверное состояние в cache 
 | --- | --- | --- |
 | `GET /api/health` | Статус работоспособности, revision, tenant mode, auth mode, model metadata | Не требует Telegram auth |
 | `GET /api/app-data` | Загрузка текущего family aggregate с фильтрацией под актора | Telegram/init internal |
-| `POST /api/batch` | Compound update нескольких доменных коллекций | Telegram/init internal |
+| `GET /api/users/{id}/avatar` | Приватный raster proxy через Telegram Bot API | Telegram/init + same-family target |
+| `POST /api/batch` | Legacy strict-revision compound update; app/bot/MCP его не вызывают | Telegram/init internal |
 | `POST /api/tasks/*` | Save, delete, reorder задач | Telegram/init internal |
 | `POST /api/epics/*` | Save/delete проектов | Telegram/init internal |
+| `POST /api/family/settings` | Политики completion и уведомлений | Parent role |
+| `POST /api/rewards/*` | Каталог, покупка и использование наград | Role/domain checks |
+| `POST /api/transactions/save` | Создание/правка операции с пересчётом счетов | Parent role |
+| `POST /api/savings-goals/contribute` | Атомарный взнос, списание и журнал | Parent role |
+| `POST /api/subscriptions/pay` | Атомарный платёж и перенос даты | Parent role |
+| `POST /api/shopping/*` | Intent-команды add/set/delete/checkout | Route/domain checks |
 | `POST /api/family/invites` | Создание invite | Owner/developer owner |
 | `POST /api/family/invites/accept` | Принятие invite | Telegram identity |
 | `POST /api/notes/*` | Save/delete заметок | Telegram/init internal |
 | `POST /api/ai/*` | AI helpers с кэшем и лимитами | Telegram/init internal |
 | `GET /api/internal/metrics` | Внутренние runtime metrics | Internal secret |
+| `GET /api/internal/reminders/due` | Кандидаты напоминаний всех семей | Internal secret |
 
 ### 4.2. Общий шаблон write request
 
 1. Прочитать и распарсить JSON body.
 2. Проверить auth через `validateRequestAuth()`.
 3. Получить `RequestContext`: actor, familyId, developer-owner flag.
-4. Прочитать текущие данные семьи, если нужно для проверки.
-5. Выполнить `assertCanWrite()` или `sanitizeBatchUpdates()`.
-6. Нормализовать payload, если route имеет server-side normalization.
-7. Выполнить `FamTrackDatabase.mutate()`.
-8. Отфильтровать результат через `filterForActor()`.
-9. Вернуть envelope с новой revision.
+4. Проверить формат `mutationId`, канонизировать payload и вычислить hash.
+5. Найти receipt `(familyId, mutationId)`: exact duplicate сразу возвращает
+   актуальный state, conflicting reuse получает 409.
+6. Для новой команды открыть транзакцию и прочитать current revision: revision
+   ниже текущей разрешена, а revision выше текущей отклоняется как conflict.
+7. Прочитать current aggregate и выполнить RBAC, нормализацию и доменную команду.
+8. В одной транзакции записать state, новую revision и receipt.
+9. Атомарно сохранить файл, отфильтровать результат и вернуть envelope.
+
+Legacy `/api/batch` остаётся на строгом `mutate()` и требует точного совпадения
+revision; это rollout-совместимость, а не основной write protocol.
 
 ### 4.3. Ошибки
 
@@ -101,7 +120,8 @@ events. React Query хранит серверное состояние в cache 
 | 400 | Неверный JSON, невалидный payload, неверная роль или параметры |
 | 401 | Отсутствует или невалиден Telegram `initData`, либо internal secret |
 | 403 | Telegram user валиден, но не связан с активным профилем или не имеет прав |
-| 409 | Stale revision, клиент должен перечитать данные |
+| 409 | Конфликт `mutationId`, доменный конфликт, future revision или stale revision legacy batch |
+| 428 | Write начат до загрузки актуальной server revision |
 | 413 | Слишком большое тело запроса или AI input |
 | 429 | Достигнут дневной family limit для AI helper |
 | 500 | Необработанная ошибка backend или failure persistence/migration |
@@ -114,7 +134,7 @@ events. React Query хранит серверное состояние в cache 
 
 - Telegram mode: проверяет подпись Telegram Web App `initData` через HMAC.
 - Dev mode: возвращает deterministic dev actor.
-- Internal mode: принимает internal secret header для agent/metrics сценариев.
+- Internal mode: принимает internal secret header для bot-reminder/metrics сценариев.
 
 Telegram allowlist может быть включён через config. При включении неизвестные
 Telegram ID или username отклоняются до доступа к family data.
@@ -161,20 +181,23 @@ Telegram ID или username отклоняются до доступа к family
 7. Валидирует миграции.
 8. Persist экспортированных bytes обратно в файл.
 
-### 6.2. Mutation transaction
+### 6.2. Command transaction
 
-`mutate()`:
+`mutateCommand()`:
 
 1. Определяет familyId и expected revision.
-2. Сравнивает expected revision с текущей `families.revision`.
-3. При mismatch бросает `RevisionConflictError`.
-4. Открывает `BEGIN IMMEDIATE`.
-5. Формирует текущий `AppData`.
-6. Применяет mutator.
-7. Заменяет family-scoped rows.
-8. Инкрементирует revision.
-9. Commit и persist.
-10. При ошибке выполняет rollback.
+2. Проверяет persisted receipt; exact duplicate не открывает повторный эффект.
+3. Открывает `BEGIN IMMEDIATE` и формирует текущий `AppData` независимо от того,
+   насколько устарела base revision клиента.
+4. Выполняет RBAC/domain mutator на текущем aggregate.
+5. Заменяет family-scoped rows, инкрементирует revision и вставляет receipt.
+6. Выполняет `COMMIT`, затем fsync временного файла и atomic rename.
+7. Если file persist после commit не удался, восстанавливает in-memory DB из
+   бинарного pre-transaction snapshot и возвращает ошибку.
+
+Все остальные прямые записи БД (Telegram profile, invites, AI usage) используют
+тот же persisted transaction primitive. `mutate()` сохранён для legacy strict
+revision path.
 
 ### 6.3. Tenant model
 
@@ -190,16 +213,18 @@ Telegram ID или username отклоняются до доступа к family
 
 ### 7.1. Семья и пользователи
 
-- `families`: имя семьи, owner, revision.
-- `users`: роль, Telegram identity, XP, level, streak, active/archive state.
+- `families`: имя семьи, owner, revision и проверенные family settings.
+- `users`: роль, Telegram identity/profile/avatar URL, XP, level, streak, active/archive state.
 - `family_invites`: token, целевую семью или сценарий создания новой семьи, роль, срок действия,
   used marker.
 
 ### 7.2. Задачи
 
 - `epics`: проектные группы, приоритет, цвет, видимость.
-- `tasks`: статус, приоритет, XP, assignee, creator, subtasks JSON, sort order,
-  due date, reminders, recurrence.
+- `tasks`: статус, приоритет, сложность, рассчитанный backend XP, assignee, creator, subtasks JSON, sort order,
+  due date, reminder policy, recurrence и server-owned completion metadata.
+- `mutation_receipts`: actor/route/payload hash, revision и timestamp для
+  идемпотентного сетевого retry.
 
 ### 7.3. Финансы
 
@@ -228,15 +253,20 @@ estimated cost, cached flag и response JSON. Это нужно для кэша,
 
 ## 8. Интеграции
 
-### 8.1. Telegram agent
+### 8.1. Семейный Telegram-бот
 
-Agent работает через long polling. Он:
+Бот работает через long polling. Он:
 
 - принимает команды от Telegram;
 - использует тот же bot token и allowlist;
 - вызывает FamTrack HTTP API;
-- пишет локальный append-only журнал событий агента;
+- регистрирует семейные private/group chat destinations и дедуплицирует reminders;
+- пишет локальный append-only audit журнал;
 - не обходит backend RBAC.
+
+В семейном процессе нет `/plan`, `/agent`, callback approval flow или запуска
+subprocess. Опциональный Codex bridge находится в отдельном неразвёрнутом
+owner-only bot process с другим токеном и state directory.
 
 ### 8.2. MCP bridge
 
@@ -270,16 +300,16 @@ backend проверяет подпись, находит actor, читает fa
 
 ### 9.2. Завершение задачи
 
-Клиент собирает batch update: задача переходит в `DONE`, участнику начисляется
-XP, создаётся reward log и activity event. Если задача recurring, создаётся
-следующий экземпляр. Backend проверяет batch scope и применяет update
-транзакционно.
+Клиент отправляет `POST /api/tasks/status`. Backend проверяет actor/family policy,
+в одной транзакции меняет статус и порядок, записывает completion metadata,
+однократно начисляет XP, создаёт reward log/activity event и recurring successor.
 
 ### 9.3. Финансовый процесс
 
-Операции в финансах меняют несколько сущностей: счета, транзакции, бюджеты,
-копилки, взносы или подписки. Для таких сценариев используется batch update,
-а backend проверяет роль и видимость.
+Операции в финансах меняют несколько сущностей через granular commands.
+Создание/редактирование транзакции отменяет предыдущий эффект и применяет новый;
+взнос, оплата подписки и shopping checkout атомарно меняют баланс, журнал и
+целевую сущность. Клиентские массивы не заменяют server state.
 
 ### 9.4. Заметки
 
@@ -297,11 +327,19 @@ Backend нормализует input, считает hash, проверяет к
 
 - Многие связи между таблицами являются application-level references, а не
   enforced foreign keys.
-- `batchUpdate` остаётся мощным API и должен оставаться под строгим RBAC.
-- LocalStorage fallback полезен для разработки, но не должен рассматриваться
-  как источник данных основного режима.
+- Legacy `/api/batch` остаётся мощным API под strict revision/RBAC и должен быть
+  удалён после завершения rollout старых клиентов.
 - Исторические ADR описывают часть To-Be решений. Актуальные As-Is диаграммы и
   этот LLD имеют приоритет для текущего состояния.
 - Для будущего масштабирования может потребоваться переход от aggregate replace
-  к более granular серверной командыs.
+  к более granular серверным командам.
 
+## 11. Release gate
+
+Infra-команда `famtrack-preflight` строит candidate image, снимает SQLite copy,
+выполняет `PRAGMA quick_check`, миграцию кандидатом и сравнение revisions/row
+counts, не останавливая production. Активация требует явного maintenance ACK.
+Перед финальным snapshot временно останавливаются public tunnel и command bot,
+поэтому rollback не может потерять запись, пришедшую после точки восстановления.
+Health, authenticated read или count regression автоматически возвращают
+финальный snapshot и previous image.

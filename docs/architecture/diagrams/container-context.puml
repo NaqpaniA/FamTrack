@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - контекст и контейнеры
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-10
+Источник: текущий worktree после ADR 006
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -45,12 +45,8 @@ rectangle "Граница приложения FamTrack" as AppBoundary {
   component "React/Vite Mini App\nэкраны, store, React Query" as Frontend #E0F2FE
   component "TypeScript HTTP Backend\nrouting, auth, RBAC, metrics" as Backend #EDE9FE
   database "SQLite через sql.js\nсемейные данные и revision" as SQLite
-  component "Telegram Agent\nlong polling, команды семьи" as Agent #DCFCE7
+  component "Семейный Telegram-бот\nкоманды и reminders, без Codex" as FamilyBot #DCFCE7
   component "MCP Bridge\nstdio tools через HTTP API" as MCP #DCFCE7
-}
-
-rectangle "Локальная разработка" as LocalDev {
-  component "LocalStorage fallback\nтолько localhost dev" as LocalFallback #FEF9C3
 }
 
 component "Aggregate metrics collector" as Collector #F1F5F9
@@ -61,8 +57,8 @@ WebView --> Frontend : initData, themeParams, haptics
 Frontend --> Backend : /api/* + X-Telegram-Init-Data
 Backend --> SQLite : миграции, чтение, транзакционные мутации
 
-BotApi <--> Agent : getUpdates/sendMessage
-Agent --> Backend : те же API-контракты и RBAC
+BotApi <--> FamilyBot : getUpdates/sendMessage
+FamilyBot --> Backend : те же API-контракты и RBAC
 
 ToolUser --> MCP : tool call
 MCP --> Backend : signed actor context + revision
@@ -70,15 +66,12 @@ MCP --> Backend : signed actor context + revision
 MonitoringUser --> Collector : scrape/status pipeline
 Collector --> Backend : /api/health и /api/internal/metrics
 
-Frontend ..> LocalFallback : fallback при недоступном localhost API
-
 legend right
   |= Цвет |= Смысл |
   |<#E0F2FE>| Клиентский слой |
   |<#EDE9FE>| Backend enforcement |
   |<#FFF7ED>| Persisted data |
-  |<#DCFCE7>| Tool/agent integrations |
-  |<#FEF9C3>| Только локальная разработка |
+  |<#DCFCE7>| Bot/tool integrations |
 endlegend
 
 note bottom of AppBoundary
@@ -86,4 +79,3 @@ note bottom of AppBoundary
 end note
 
 @enduml
-

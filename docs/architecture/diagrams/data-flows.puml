@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - потоки данных и доверенные зоны
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-10
+Источник: текущий worktree после ADR 006
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -28,7 +28,6 @@ rectangle "Недоверенная зона клиента" as ClientZone #E0F2
   rectangle "React UI\nэкраны и формы" as ReactUi
   rectangle "React Query cache\noptimistic state" as QueryCache
   rectangle "ServerAdapter\nlatestRevision" as ServerAdapter
-  rectangle "LocalStorage fallback\nтолько dev localhost" as LocalFallback
 }
 
 rectangle "Backend enforcement zone" as BackendZone #EDE9FE {
@@ -44,7 +43,7 @@ rectangle "Backend enforcement zone" as BackendZone #EDE9FE {
 database "SQLite persistence zone\nfamily-scoped tables" as SQLite
 
 rectangle "Integration zone" as IntegrationZone #DCFCE7 {
-  rectangle "Telegram Agent\nlong polling commands" as Agent
+  rectangle "Семейный Telegram-бот\ncommands + reminders, без Codex" as FamilyBot
   rectangle "MCP Bridge\nstdio tools" as Mcp
   rectangle "Internal metrics collector" as Collector
 }
@@ -54,7 +53,6 @@ WebView --> ReactUi : initData
 ReactUi --> QueryCache : read/write cache
 QueryCache --> ServerAdapter : load/mutate
 ServerAdapter --> HttpApi : JSON request
-ServerAdapter ..> LocalFallback : fallback только для localhost
 
 HttpApi --> Authn : проверить подпись или internal secret
 Authn --> ActorResolution : AuthContext
@@ -68,9 +66,9 @@ AiPolicy --> SQLite : ai_usage cache/read/write
 MetricsStore <-- HttpApi : record on response finish
 HttpApi --> ServerAdapter : envelope или ошибка
 
-User --> Agent : bot command
-Agent --> HttpApi : API request, тот же RBAC
-Agent --> User : bot reply
+User --> FamilyBot : bot command
+FamilyBot --> HttpApi : API request, тот же RBAC
+FamilyBot --> User : bot reply/reminder
 
 ToolUser --> Mcp : tool call
 Mcp --> HttpApi : signed actor API request
@@ -84,9 +82,8 @@ legend right
   |= Поток |= Контроль |
   | Клиент -> API | Telegram initData, revision |
   | API -> SQLite | backend transaction |
-  | Agent/MCP -> API | тот же backend RBAC |
+  | Bot/MCP -> API | тот же backend RBAC |
   | Metrics -> API | internal secret, aggregate-only |
 endlegend
 
 @enduml
-

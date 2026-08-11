@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - интеграционные последовательности
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-10
+Источник: текущий worktree после ADR 006
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -23,7 +23,7 @@ actor "Пользователь Telegram" as TgUser
 actor "Пользователь MCP/tool" as ToolUser
 actor "Сборщик метрик" as MetricsUser
 participant "Telegram Bot API" as Telegram
-participant "Telegram Agent" as Agent
+participant "Семейный Telegram-бот" as FamilyBot
 participant "MCP Bridge" as MCP
 participant "HTTP API" as API
 participant "Auth" as Auth
@@ -32,66 +32,140 @@ participant "FamTrackDatabase" as DB
 participant "Metrics store" as Metrics
 
 group Telegram read command
+  activate TgUser
   TgUser -> Telegram : /status, /tasks, /finance
-  Telegram -> Agent : getUpdates response
-  Agent -> API : GET /api/app-data\nactor Telegram context
+  activate Telegram
+  Telegram -> FamilyBot : getUpdates response
+  activate FamilyBot
+  FamilyBot -> API : GET /api/app-data\nactor Telegram context
+  activate API
   API -> Auth : validate identity
+  activate Auth
+  Auth --> API : AuthContext
+  deactivate Auth
   API -> DB : resolveActor()
+  activate DB
+  DB --> API : active family member
+  deactivate DB
   API -> RBAC : filterForActor()
-  API --> Agent : visible AppData
-  Agent -> Agent : format safe response
-  Agent -> Telegram : sendMessage
+  activate RBAC
+  RBAC --> API : visible AppData
+  deactivate RBAC
+  API --> FamilyBot : visible AppData
+  deactivate API
+  FamilyBot -> FamilyBot : format safe response
+  FamilyBot -> Telegram : sendMessage
+  Telegram --> FamilyBot : message id
+  FamilyBot --> Telegram : update handled
+  deactivate FamilyBot
   Telegram --> TgUser : ответ
+  deactivate Telegram
+  deactivate TgUser
 end
 
 group Telegram write command
+  activate TgUser
   TgUser -> Telegram : /task Купить молоко
-  Telegram -> Agent : update
-  Agent -> API : GET /api/app-data
-  API --> Agent : {revision, data}
-  Agent -> Agent : build task\nassignee=actor, createdBy=actor
-  Agent -> API : POST /api/tasks/save\n{revision, task}
+  activate Telegram
+  Telegram -> FamilyBot : update
+  activate FamilyBot
+  FamilyBot -> API : GET /api/app-data
+  activate API
+  API --> FamilyBot : {revision, data}
+  deactivate API
+  FamilyBot -> FamilyBot : build task\nassignee=actor, createdBy=actor
+  FamilyBot -> API : POST /api/tasks/save\n{revision, task}
+  activate API
   API -> Auth : validate identity
+  activate Auth
+  Auth --> API : AuthContext
+  deactivate Auth
   API -> RBAC : assertCanWrite()
+  activate RBAC
+  RBAC --> API : allowed
+  deactivate RBAC
   API -> DB : mutate()
+  activate DB
   DB --> API : next revision
-  API --> Agent : success
-  Agent -> Telegram : sendMessage(created)
+  deactivate DB
+  API --> FamilyBot : success
+  deactivate API
+  FamilyBot -> Telegram : sendMessage(created)
+  Telegram --> FamilyBot : message id
+  FamilyBot --> Telegram : update handled
+  deactivate FamilyBot
+  Telegram --> TgUser : подтверждение
+  deactivate Telegram
+  deactivate TgUser
 end
 
 group MCP tool read/write
+  activate ToolUser
   ToolUser -> MCP : create_task(telegram_id, title)
+  activate MCP
   MCP -> MCP : sign synthetic initData
   MCP -> API : GET /api/app-data
+  activate API
   API -> Auth : validate signed initData
+  activate Auth
+  Auth --> API : AuthContext
+  deactivate Auth
   API -> RBAC : filterForActor()
+  activate RBAC
+  RBAC --> API : visible AppData
+  deactivate RBAC
   API --> MCP : current revision + actor
+  deactivate API
   MCP -> API : POST /api/tasks/save\n{revision, task}
+  activate API
   API -> RBAC : assertCanWrite()
+  activate RBAC
+  RBAC --> API : allowed
+  deactivate RBAC
   API -> DB : mutate()
+  activate DB
+  DB --> API : next revision
+  deactivate DB
   API --> MCP : next revision
+  deactivate API
   MCP --> ToolUser : tool result
+  deactivate MCP
+  deactivate ToolUser
 end
 
 group Internal metrics
+  activate MetricsUser
   MetricsUser -> API : GET /api/internal/metrics\ninternal secret
+  activate API
   API -> Auth : validate internal secret
+  activate Auth
+  Auth --> API : internal AuthContext
+  deactivate Auth
   API -> Metrics : snapshot()
-  API -> DB : health()
-  DB --> API : revision + family count
+  activate Metrics
   Metrics --> API : routes, latency buckets, memory
+  deactivate Metrics
+  API -> DB : health()
+  activate DB
+  DB --> API : revision + family count
+  deactivate DB
   API --> MetricsUser : aggregate runtime health
+  deactivate API
+  deactivate MetricsUser
 end
 
 group Static frontend
+  activate TgUser
   TgUser -> API : GET / или asset path
+  activate API
   API -> API : safe path normalize
   alt file exists
     API --> TgUser : asset with cache headers
   else SPA fallback
     API --> TgUser : index.html
   end
+  deactivate API
+  deactivate TgUser
 end
 
 @enduml
-

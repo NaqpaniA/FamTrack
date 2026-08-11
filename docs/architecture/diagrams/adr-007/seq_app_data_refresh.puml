@@ -1,0 +1,57 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+  $B("GET /api/app-data")
+  $SM($MUTED("Automatic family-state refresh / interval, focus and reconnect"))
+end title
+footer $SM($MUTED("GET /api/app-data / Telegram-authenticated authoritative family revision"))
+
+box "User / browser" $L_USER
+  actor "Family member" as member
+  participant "Refresh trigger\n(4 s / focus / reconnect)" as trigger <<p_new>>
+  boundary "React Query + request queue" as client <<p_chg>>
+end box
+
+box "API" $L_API
+  boundary "FamTrack HTTP API" as api <<p_chg>>
+end box
+
+box "State" $L_DATA
+  database "In-memory SQLite aggregate" as db
+end box
+
+activate trigger
+trigger -[$C_NEW]> client : refresh(reason, cachedRevision?): RefreshResult
+activate client
+  client -[$C_NEW]> client : enqueue behind pending client command
+  client -[$C_CHG]> api : GET /api/app-data\nX-Telegram-Init-Data
+  activate api
+    api -[$C_CHG]> api : validate initData + resolve family actor
+    api -[$C_CHG]> db : read family aggregate + revision
+    activate db
+      db --[$C_CHG]> api : ApiEnvelope(revision, actor-filterable data)
+    deactivate db
+    api -[$C_CHG]> api : apply RBAC/privacy filter
+    api --[$C_CHG]> client : 200 ApiEnvelope(revision, data)
+  deactivate api
+
+  alt#$FR_INFO_HEAD #$FR_INFO_BG revision is newer
+    client -[$C_NEW]> client : replace cache atomically
+    client --[$C_NEW]> member : render changes without manual refresh
+    client --[$C_NEW]> trigger : RefreshResult(updated, revision)
+  else #$FR_INFO_BG revision unchanged
+    client --[$C_NEW]> trigger : RefreshResult(unchanged, revision)
+  end
+
+  break#$FR_WARN_HEAD #$FR_WARN_BG auth/network/server failure
+    client -[$C_NEW]> client : retain last confirmed cache; schedule normal retry
+    client --[$C_NEW]> trigger : RefreshResult(degraded, requestId?)
+  end
+deactivate client
+deactivate trigger
+
+SEQ_LEGEND_STATUS()
+@enduml

@@ -1,0 +1,55 @@
+@startuml
+!include _style_seq.puml
+
+title
+  $B("FamTrack data-safe deployment")
+  $SM($MUTED("Candidate migration drill before the only production writer is replaced"))
+end title
+footer $SM($MUTED("Release gate / final snapshot + previous image are the rollback point"))
+
+start
+:Run local checks;
+if (local gate green?) then (yes)
+  :Read production health, image id and revision;
+  :Create timestamped DB snapshot (0600);
+  :Run PRAGMA quick_check and capture family/global row counts;
+  if (snapshot valid?) then (yes)
+    :Build candidate image;
+    :Copy snapshot to isolated drill directory;
+    :Run candidate migrations against copy only;
+    :Re-run integrity and compare revisions/counts;
+    if (restore drill preserves data?) then (yes)
+      :Require explicit maintenance ACK;
+      :Stop public tunnel, command bot and alert bot;
+      :Stop the single writer;
+      :Create final snapshot and record previous image;
+      :Repeat candidate migration drill on final copy;
+      :Start candidate with production volume;
+      if (health + authenticated read + row counts pass?) then (yes)
+        :Keep final snapshot for retention window;
+        :Resume command bot, alert bot and public tunnel;
+        :End maintenance window;
+      else (no)
+        :Stop candidate;
+        :Restore final snapshot;
+        :Start previous image;
+        :Verify health + revision + control read;
+        :Resume previous command bot, alert bot and public tunnel;
+      endif
+    else (no)
+      :Abort before production stop;
+    endif
+  else (no)
+    :Abort; investigate backup/storage;
+  endif
+else (no)
+  :Abort; fix candidate locally;
+endif
+stop
+
+legend bottom right
+  |= Цвет |= Значение |
+  |<#ECFDF3> | persisted state |
+  |<#FFF8E1> | release/rollback gate |
+endlegend
+@enduml

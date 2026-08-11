@@ -1,0 +1,52 @@
+@startuml
+!pragma teoz true
+!include _style_product_seq.puml
+title Change task status / complete task
+autonumber
+
+actor "Member or parent" as Actor
+boundary "Task UI / Kanban" as UI
+boundary "POST /api/tasks/status" as API
+control "RBAC + family policy" as Policy
+control "Task status command" as Command
+database "SQLite" as DB
+
+activate Actor
+Actor -> UI: Check task or drag card
+activate UI
+UI -> API: {revision, taskId, status, beforeTaskId?}
+activate API
+API -> Policy: authorize actor + assignee + settings
+activate Policy
+Policy -> DB: read task, members, family settings
+activate DB
+DB --> Policy: current aggregate
+deactivate DB
+Policy --> API: authorized context or forbidden result
+deactivate Policy
+
+alt authorized
+  API -> Command: execute inside revision mutation
+  activate Command
+  Command -> DB: BEGIN IMMEDIATE + verify revision
+  activate DB
+  alt first transition to DONE
+    DB -> DB: set completion metadata\ncredit assignee XP once\nappend log + event\ncreate recurring successor
+  else reorder / reopen / retry
+    DB -> DB: update status/order\npreserve rewardedAt
+  end
+  DB -> DB: increment family revision + COMMIT
+  DB --> Command: authoritative envelope
+  deactivate DB
+  Command --> API: filtered envelope
+  deactivate Command
+  API --> UI: 200 + new revision
+  UI --> Actor: Updated board and XP
+else parent completion policy disabled
+  API --> UI: 403 forbidden
+  UI --> Actor: Explain family setting
+end
+deactivate API
+deactivate UI
+deactivate Actor
+@enduml

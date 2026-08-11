@@ -1,0 +1,51 @@
+@startuml
+!pragma teoz true
+!include _style_product_seq.puml
+title Authoritative family state load
+autonumber
+
+actor Member
+boundary "React UI" as UI
+control "React Query" as Query
+boundary "HTTP API" as API
+control "Auth + tenant resolver" as Auth
+database "SQLite family aggregate" as DB
+
+activate Member
+Member -> UI: Open FamTrack
+activate UI
+UI -> Query: useFamilyData()
+activate Query
+Query -> API: GET /api/app-data\nTelegram initData
+activate API
+API -> Auth: validate identity and resolve actor
+activate Auth
+Auth -> DB: resolveActor(telegram identity)
+activate DB
+DB --> Auth: active member + familyId
+deactivate DB
+Auth --> API: request context
+deactivate Auth
+alt identity and storage are available
+  API -> DB: exportEnvelope(actor)
+  activate DB
+  DB --> API: {revision, family data}
+  deactivate DB
+  API --> Query: 200 filtered envelope
+  Query --> UI: authoritative data
+  UI --> Member: Render family workspace
+else API/storage error
+  API --> Query: 4xx/5xx error
+  Query --> UI: typed load error
+  UI --> Member: Explicit load error + Retry\n(no demo fallback)
+end
+deactivate API
+deactivate Query
+deactivate UI
+deactivate Member
+
+note over Query,DB
+Mutation precondition: numeric revision is mandatory.
+Missing revision = 428; stale revision = 409.
+end note
+@enduml
