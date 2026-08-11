@@ -59,6 +59,13 @@ task ID, текущий срок, points и история. Одинаковые
 порядок/скрытие widget и opt-in weather. Wishlist использует те же family/RBAC
 границы; владелец желания не видит резервирование своего подарка.
 
+Weather отсутствует до явного opt-in пользователя. После включения браузер
+запрашивает coarse geolocation, округляет координаты до двух знаков и напрямую
+получает current conditions из Open-Meteo. Координаты не входят в AppData,
+outbox, backend logs или SQLite. `Permissions-Policy` и CSP разрешают
+геолокацию/Open-Meteo только при активном release flag `ROUTINES`; отказ в
+permission или недоступность provider не влияет на остальные widgets.
+
 ## 5. Инварианты и проверки
 
 - максимум одна открытая task на cyclic template;

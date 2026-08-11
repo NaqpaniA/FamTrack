@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     ArrowDown,
     ArrowUp,
     Check,
     CirclePause,
+    CloudSun,
     Gauge,
     Gift,
     HeartPulse,
@@ -13,6 +14,7 @@ import {
     Minus,
     PackagePlus,
     Plus,
+    RefreshCw,
     Settings2,
     SkipForward,
     X
@@ -23,7 +25,7 @@ import type { Wishlist, WishlistItem } from './wishlist.model';
 import { Panel, SectionHeader } from './ui-kit';
 import { formatMoney } from './utils';
 
-const DASHBOARD_WIDGETS = ['routines', 'day-pulse', 'house-health', 'history', 'leaderboard', 'projects', 'activity', 'notes', 'wishlists'] as const;
+const DASHBOARD_WIDGETS = ['routines', 'day-pulse', 'house-health', 'history', 'leaderboard', 'projects', 'activity', 'notes', 'weather', 'wishlists'] as const;
 type DashboardWidget = typeof DASHBOARD_WIDGETS[number];
 
 const WIDGET_LABELS: Record<DashboardWidget, string> = {
@@ -35,6 +37,7 @@ const WIDGET_LABELS: Record<DashboardWidget, string> = {
     projects: 'Проекты и цели',
     activity: 'Активность',
     notes: 'Заметки',
+    weather: 'Погода (opt-in)',
     wishlists: 'Желания'
 };
 
@@ -94,11 +97,20 @@ export const HouseholdDashboard = ({
         [next[index], next[target]] = [next[target], next[index]];
         updatePreferences({ widgetOrder: next });
     };
-    const toggleWidget = (widget: DashboardWidget) => updatePreferences({
-        hiddenWidgets: hidden.has(widget)
-            ? preferences.hiddenWidgets.filter(item => item !== widget)
-            : [...preferences.hiddenWidgets, widget]
-    });
+    const toggleWidget = (widget: DashboardWidget) => {
+        if (widget === 'weather') {
+            updatePreferences({
+                weatherOptIn: !preferences.weatherOptIn,
+                hiddenWidgets: preferences.hiddenWidgets.filter(item => item !== widget)
+            });
+            return;
+        }
+        updatePreferences({
+            hiddenWidgets: hidden.has(widget)
+                ? preferences.hiddenWidgets.filter(item => item !== widget)
+                : [...preferences.hiddenWidgets, widget]
+        });
+    };
 
     const widgets: Record<DashboardWidget, React.ReactNode> = {
         routines: <RoutinesWidget data={data} actions={actions} />,
@@ -109,6 +121,7 @@ export const HouseholdDashboard = ({
         projects: externalWidgets.projects || null,
         activity: externalWidgets.activity || null,
         notes: externalWidgets.notes || null,
+        weather: <WeatherWidget onDisable={() => updatePreferences({ weatherOptIn: false })} />,
         wishlists: <WishlistWidget data={data} actions={actions} />
     };
 
@@ -141,28 +154,30 @@ export const HouseholdDashboard = ({
             {customizing && (
                 <Panel className="p-3" aria-label="Настройка виджетов">
                     <div className="space-y-2">
-                        {order.map((widget, index) => (
-                            <div key={widget} className="flex min-h-11 items-center gap-2 rounded-xl bg-black/[0.025] px-3">
+                        {order.map((widget, index) => {
+                            const enabled = widget === 'weather' ? preferences.weatherOptIn : !hidden.has(widget);
+                            return <div key={widget} className="flex min-h-11 items-center gap-2 rounded-xl bg-black/[0.025] px-3">
                                 <button
                                     type="button"
                                     onClick={() => toggleWidget(widget)}
                                     className="flex flex-1 items-center gap-2 text-left text-sm font-semibold"
-                                    aria-pressed={!hidden.has(widget)}
+                                    aria-pressed={enabled}
                                 >
-                                    <span className={`grid h-5 w-5 place-items-center rounded-md ${hidden.has(widget) ? 'bg-gray-200 text-gray-400' : 'bg-emerald-100 text-emerald-700'}`}>
-                                        {hidden.has(widget) ? <X size={12} /> : <Check size={12} />}
+                                    <span className={`grid h-5 w-5 place-items-center rounded-md ${enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-400'}`}>
+                                        {enabled ? <Check size={12} /> : <X size={12} />}
                                     </span>
                                     {WIDGET_LABELS[widget]}
                                 </button>
                                 <button type="button" disabled={index === 0} onClick={() => moveWidget(widget, -1)} aria-label={`Поднять ${WIDGET_LABELS[widget]}`} className="p-2 disabled:opacity-25"><ArrowUp size={15} /></button>
                                 <button type="button" disabled={index === order.length - 1} onClick={() => moveWidget(widget, 1)} aria-label={`Опустить ${WIDGET_LABELS[widget]}`} className="p-2 disabled:opacity-25"><ArrowDown size={15} /></button>
-                            </div>
-                        ))}
+                            </div>;
+                        })}
+                        <p className="px-2 text-[10px] leading-relaxed text-gray-400">Погода запрашивает приблизительную геопозицию только после включения. Координаты не сохраняются в FamTrack и отправляются напрямую погодному сервису.</p>
                     </div>
                 </Panel>
             )}
 
-            {order.filter(widget => !hidden.has(widget)).map(widget => (
+            {order.filter(widget => !hidden.has(widget) && (widget !== 'weather' || preferences.weatherOptIn)).map(widget => (
                 <React.Fragment key={widget}>{widgets[widget]}</React.Fragment>
             ))}
         </section>
@@ -403,6 +418,131 @@ const LeaderboardWidget = ({ data }: { data: AppData }) => {
             </Panel>
         </div>
     );
+};
+
+type CurrentWeather = {
+    temperature: number;
+    apparentTemperature?: number;
+    weatherCode: number;
+    isDay: boolean;
+    windSpeed?: number;
+    updatedAt: number;
+};
+
+const WeatherWidget = ({ onDisable }: { onDisable: () => void }) => {
+    const [weather, setWeather] = useState<CurrentWeather>();
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [refreshKey, setRefreshKey] = useState(0);
+
+    useEffect(() => {
+        let active = true;
+        const controller = new AbortController();
+        setLoading(true);
+        setError('');
+        if (!navigator.geolocation) {
+            setLoading(false);
+            setError('Геопозиция недоступна в этом клиенте Telegram.');
+            return () => controller.abort();
+        }
+        navigator.geolocation.getCurrentPosition(position => {
+            const latitude = Math.round(position.coords.latitude * 100) / 100;
+            const longitude = Math.round(position.coords.longitude * 100) / 100;
+            const query = new URLSearchParams({
+                latitude: String(latitude),
+                longitude: String(longitude),
+                current: 'temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m',
+                timezone: 'auto',
+                forecast_days: '1'
+            });
+            void fetch(`https://api.open-meteo.com/v1/forecast?${query}`, { signal: controller.signal })
+                .then(async response => {
+                    if (!response.ok) throw new Error(`Weather API ${response.status}`);
+                    const payload = await response.json() as {
+                        current?: {
+                            temperature_2m?: unknown;
+                            apparent_temperature?: unknown;
+                            weather_code?: unknown;
+                            is_day?: unknown;
+                            wind_speed_10m?: unknown;
+                        };
+                    };
+                    const current = payload.current;
+                    const temperature = Number(current?.temperature_2m);
+                    const weatherCode = Number(current?.weather_code);
+                    if (!Number.isFinite(temperature) || !Number.isFinite(weatherCode)) throw new Error('Invalid weather response');
+                    if (!active) return;
+                    const apparentTemperature = Number(current?.apparent_temperature);
+                    const windSpeed = Number(current?.wind_speed_10m);
+                    setWeather({
+                        temperature,
+                        apparentTemperature: Number.isFinite(apparentTemperature) ? apparentTemperature : undefined,
+                        weatherCode,
+                        isDay: Number(current?.is_day) === 1,
+                        windSpeed: Number.isFinite(windSpeed) ? windSpeed : undefined,
+                        updatedAt: Date.now()
+                    });
+                    setLoading(false);
+                })
+                .catch(fetchError => {
+                    if (!active || controller.signal.aborted) return;
+                    setLoading(false);
+                    setError(fetchError instanceof Error && fetchError.message.startsWith('Weather API')
+                        ? 'Погодный сервис временно недоступен.'
+                        : 'Не удалось загрузить погоду.');
+                });
+        }, geolocationError => {
+            if (!active) return;
+            setLoading(false);
+            setError(geolocationError.code === geolocationError.PERMISSION_DENIED
+                ? 'Доступ к геопозиции не разрешён.'
+                : 'Не удалось определить приблизительное местоположение.');
+        }, { enableHighAccuracy: false, timeout: 10_000, maximumAge: 15 * 60 * 1000 });
+        return () => {
+            active = false;
+            controller.abort();
+        };
+    }, [refreshKey]);
+
+    const condition = weather ? weatherCondition(weather.weatherCode, weather.isDay) : undefined;
+    return (
+        <div>
+            <SectionHeader
+                title="Погода"
+                action={<button type="button" onClick={onDisable} className="text-xs font-bold text-gray-400">Выключить</button>}
+            />
+            <Panel className="mt-3 p-4">
+                {loading ? (
+                    <div className="flex min-h-20 items-center justify-center gap-2 text-sm text-gray-400"><CloudSun size={18} className="animate-pulse" /> Загружаю погоду…</div>
+                ) : error ? (
+                    <div className="space-y-3 text-center">
+                        <p className="text-sm text-gray-500">{error}</p>
+                        <button type="button" onClick={() => setRefreshKey(value => value + 1)} className="min-h-10 rounded-xl bg-blue-50 px-4 text-xs font-black text-blue-700">Повторить</button>
+                    </div>
+                ) : weather && condition ? (
+                    <div className="flex items-center gap-4">
+                        <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-sky-100 text-3xl" aria-hidden="true">{condition.icon}</div>
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline gap-2"><span className="text-2xl font-black">{Math.round(weather.temperature)}°</span><span className="truncate text-sm font-bold text-gray-600">{condition.label}</span></div>
+                            <div className="mt-0.5 text-[11px] text-gray-400">Ощущается {Math.round(weather.apparentTemperature ?? weather.temperature)}°{weather.windSpeed == null ? '' : ` · ветер ${Math.round(weather.windSpeed)} км/ч`}</div>
+                            <div className="mt-1 text-[9px] text-gray-300">Координаты округлены и не сохраняются · <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline">Open-Meteo</a></div>
+                        </div>
+                        <button type="button" onClick={() => setRefreshKey(value => value + 1)} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-gray-300" aria-label="Обновить погоду"><RefreshCw size={15} /></button>
+                    </div>
+                ) : null}
+            </Panel>
+        </div>
+    );
+};
+
+const weatherCondition = (code: number, isDay: boolean) => {
+    if (code === 0) return { label: 'Ясно', icon: isDay ? '☀️' : '🌙' };
+    if ([1, 2, 3].includes(code)) return { label: 'Облачно', icon: isDay ? '⛅' : '☁️' };
+    if ([45, 48].includes(code)) return { label: 'Туман', icon: '🌫️' };
+    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return { label: 'Дождь', icon: '🌧️' };
+    if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) return { label: 'Снег', icon: '🌨️' };
+    if (code >= 95) return { label: 'Гроза', icon: '⛈️' };
+    return { label: 'Переменная погода', icon: '🌤️' };
 };
 
 const WishlistWidget = ({ data, actions }: { data: AppData; actions: HouseholdActions }) => {

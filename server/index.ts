@@ -115,7 +115,10 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('X-Request-Id', requestId);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Permissions-Policy', `camera=${capabilities.pantry ? '(self)' : '()'}, microphone=(), geolocation=()`);
+    res.setHeader(
+        'Permissions-Policy',
+        `camera=${capabilities.pantry ? '(self)' : '()'}, microphone=(), geolocation=${capabilities.routines ? '(self)' : '()'}`
+    );
     res.on('finish', () => {
         metrics.record(req.method || 'UNKNOWN', pathname, res.statusCode, performance.now() - started);
     });
@@ -1354,10 +1357,13 @@ async function serveStatic(res: ServerResponse, rawPathname: string) {
     }
 
     if (path.basename(resolved) === 'index.html') {
+        const connectSources = capabilities.routines
+            ? "'self' https://api.open-meteo.com"
+            : "'self'";
         res.setHeader(
             'Content-Security-Policy',
             "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; "
-            + "img-src 'self' data: blob: https:; connect-src 'self'; font-src 'self' data:; object-src 'none'; "
+            + `img-src 'self' data: blob: https:; connect-src ${connectSources}; font-src 'self' data:; object-src 'none'; `
             + "base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
         );
     }
