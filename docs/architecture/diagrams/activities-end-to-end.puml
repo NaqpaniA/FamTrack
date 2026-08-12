@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - activity диаграммы сквозных процессов
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -18,13 +18,18 @@ start
 
 partition "1. Вход и построение read model" {
   :Открыть Telegram Mini App;
-  :Получить initData;
-  :GET /api/app-data;
-  :Проверить Telegram подпись;
+  :Получить initData, theme и safe area;
+  :GET /api/app-data\nс If-None-Match, если ETag известен;
+  :Проверить Telegram подпись и max age;
   if (actor найден?) then (да)
-    :Загрузить family aggregate;
-    :Отфильтровать данные по роли;
-    :Вернуть {revision, data};
+    if (ETag совпал?) then (да)
+      :304, использовать кэш\nи запустить outbox replay;
+    else (нет)
+      :Загрузить family aggregate;
+      :filterForActor по роли и видимости;
+      :applyCapabilities по включённым доменам;
+      :Вернуть {revision, data} + ETag;
+    endif
   else (нет)
     :Вернуть 401/403;
     stop
@@ -33,80 +38,107 @@ partition "1. Вход и построение read model" {
 
 partition "2. Выбор доменного сценария" {
   if (задача?) then (task)
-    :Создать/изменить задачу;
-    if (mark DONE?) then (да)
-      :Начислить XP;
-      :Добавить reward log;
-      :Добавить TASK_COMPLETED event;
-      if (recurring?) then (да)
-        :Создать следующую задачу;
-      endif
+    :Создать или изменить задачу;
+    if (сменить статус?) then (да)
+      :POST /api/tasks/status;
+      :Сервер считает XP\nпо difficulty и priority;
+      :reward log и TASK_COMPLETED event;
+    endif
+  elseif (рутина?) then (routine)
+    if (accumulator?) then (да)
+      :record-unit копит единицы\nбез XP и reward log;
+      :complete гасит партию:\nbaseXp x N + пересечённые\nstreak milestones;
+    else (нет)
+      :complete закрывает occurrence\nи открывает следующую;
     endif
   elseif (финансы?) then (finance)
     :Создать transaction\nили обновить account/goal/subscription;
     if (копилка?) then (да)
-      :Создать contribution;
-      :Создать GOAL_CONTRIBUTION event;
+      :Серверный contribute:\nсписание, зачисление,\nGOAL_CONTRIBUTION event;
     endif
     if (подписка оплачена?) then (да)
       :Создать transaction;
       :Перенести nextPaymentDate;
       :Создать SUBSCRIPTION_PAID event;
     endif
-  elseif (покупки?) then (shopping)
+  elseif (покупки и запасы?) then (shopping)
     :Добавить или отметить item;
     if (checkout?) then (да)
       :Создать expense transaction;
       :Удалить completed items;
       :Создать SHOPPING_CHECKOUT event;
     endif
+    if (сканер или чек?) then (да)
+      :draft purchase import;
+      :barcode или страницы чека + OCR;
+      :review позиций;
+      :confirm: pantry-движения\nи один EXPENSE при трате по счёту;
+    endif
   elseif (заметки?) then (notes)
-    :Создать/изменить note;
+    :Создать или изменить note;
     if (new FAMILY note?) then (да)
       :Создать NOTE_CREATED event;
     endif
+  elseif (желания?) then (wishlist)
+    :Изменить список или позицию;
+    :Резервирование скрыто от владельца\nжелания, чтобы не раскрыть сюрприз;
   else (family/rewards)
     :Изменить участника, награду или инвентарь;
     :Создать reward log/event при необходимости;
   endif
 }
 
-partition "3. Серверная запись" {
-  :POST /api/... с revision;
-  :validateRequestAuth();
-  :resolveActor();
-  if (batch?) then (да)
-    :sanitizeBatchUpdates();
-  else (нет)
-    :assertCanWrite();
+partition "3. Доставка команды" {
+  if (revision загружена?) then (нет)
+    :428, команда не создаётся;
+    stop
+  else (да)
   endif
-  if (write allowed?) then (да)
-    :FamTrackDatabase.mutate();
-    if (revision актуальна?) then (да)
-      :BEGIN IMMEDIATE;
-      :replace family rows;
-      :revision + 1;
-      :COMMIT;
-      :persist DB file;
-    else (нет)
+  :Записать команду в IndexedDB outbox\nс mutationId и базовой revision;
+  :Single-flight доставка всего outbox\nв порядке создания;
+  :POST /api/... с X-FamTrack-Outbox-Retry;
+}
+
+partition "4. Серверная запись" {
+  :validateRequestAuth();
+  :resolveRequestContext();
+  :requireFeature для доменов\nза feature flag;
+  :assertCanWrite();
+  if (write allowed?) then (нет)
+    :403 forbidden;
+    :Команда помечается needsReview;
+    stop
+  else (да)
+  endif
+  :mutateCommand(mutationId, requestHash);
+  if (квитанция уже есть?) then (да)
+    :duplicate=true, повторной записи нет;
+  else (нет)
+    if (клиентская revision опережает серверную?) then (да)
       :409 conflict;
       :Клиент refetch;
       stop
+    else (нет)
+      :BEGIN IMMEDIATE;
+      :assertWriteSetCoversChanges\nпо route-scoped write set;
+      :replace только затронутые коллекции;
+      :revision + 1, если данные изменились;
+      :INSERT mutation_receipts;
+      :COMMIT;
+      :persist: tmp + fsync + rename;
     endif
-  else (нет)
-    :403 forbidden;
-    stop
   endif
 }
 
-partition "4. Ответ и наблюдаемость" {
-  :filterForActor(nextData);
-  :Вернуть новый envelope;
+partition "5. Ответ и наблюдаемость" {
+  :filterForActor(nextData) и applyCapabilities;
+  :Вернуть {revision, data, command} + ETag;
+  :Клиент сверяет command.mutationId,\nудаляет запись из outbox\nи обновляет SaveState;
   :React Query invalidation;
-  :Metrics store записывает route count,\nlatency bucket и status class;
+  :Metrics store записывает route count,\nlatency bucket, status class,\noutbox retry и persist_failure;
+  :Команды рутин пишут structured\noutcome log с units и XP;
 }
 
 stop
 
 @enduml
-

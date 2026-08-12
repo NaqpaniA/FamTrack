@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - жизненный цикл БД, миграций и revision
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -20,24 +20,32 @@ partition "Startup: FamTrackDatabase.open()" {
   :Найти sql.js wasm/runtime;
   :Создать директорию dbPath;
   if (SQLite file exists?) then (да)
-    :Скопировать file в backup\nс timestamp suffix;
+    :backupDatabaseFile():\nкопия с timestamp suffix,\nстарые сверх FAMTRACK_BACKUP_RETENTION\n(по умолчанию 10) удаляются;
     :Открыть SQLite из bytes;
   else (нет)
     :Создать новую SQLite database;
   endif
 
-  :createSchema();
-  :ensureLegacyFamilyIds();
-  :ensureBudgetsSchema();
-  :addColumnIfMissing(tasks.sort_order);
-  :legacy demo cleanup migrations;
-  :INSERT schema_migrations текущей версии;
+  partition "migrate()" {
+    :createSchema():\n31 таблица и доменные индексы;
+    :ensureLegacyFamilyIds();
+    :ensureBudgetsSchema();
+    :addColumnIfMissing по tasks, users,\nfamilies, rewards и purchase_import_files\n(difficulty, notification_mode, completed_*,\nroutine_* колонки, avatar_url, settings_json,\nis_active, width/height);
+    :migrateLegacyRecurringTasks():\nповторяющиеся задачи -> routine_templates;
+    :legacy demo cleanup migrations;
+    :INSERT OR IGNORE schema_migrations\nтекущей MIGRATION_VERSION;
+  }
 
   if (family has users?) then (да)
     :Не seed-ить initial data;
   else (нет)
     :insert default family;
-    :replaceFamilyData(initial data);
+    :bootstrap owner workspace\nиз первой allowed Telegram identity;
+    if (production и FAMTRACK_BOOTSTRAP_DEMO != 1?) then (да)
+      :оставить чистое рабочее пространство;
+    else (нет)
+      :replaceFamilyData(demo data);
+    endif
     :set revision = 1;
   endif
 
@@ -51,38 +59,89 @@ partition "Startup: FamTrackDatabase.open()" {
 }
 
 partition "Read path" {
-  :resolve familyId from actor;
-  :SELECT family row;
-  :SELECT all family-scoped tables;
-  :rowTo* mappers build AppData;
-  :filterForActor before response;
-}
-
-partition "Write path" {
-  :Получить expectedRevision от клиента;
-  :SELECT current families.revision;
-  if (expectedRevision != current?) then (conflict)
-    :throw RevisionConflictError 409;
+  :resolve familyId и actor из свежих members;
+  :SELECT family row + все family-scoped таблицы;
+  :rowTo* mappers собирают AppData;
+  :filterForActor: видимость задач, заметок,\nсчетов и spoiler-safe wishlists;
+  :applyCapabilities вырезает выключенные домены;
+  :ETag = family revision;
+  if (If-None-Match совпал?) then (да)
+    :304 Not Modified без тела;
     stop
-  else (ok)
-    :BEGIN IMMEDIATE;
-    :getAppData(familyId, actor);
-    :apply mutator;
-    :replaceFamilyData(familyId, next);
-    :setFamilyRevision(current + 1);
-    if (mutation ok?) then (да)
-      :COMMIT;
-      :persist exported DB bytes;
-    else (нет)
-      :ROLLBACK;
-      :return error;
-      stop
-    endif
+  else (нет)
+    :200 {revision, data};
   endif
 }
 
-:Return next envelope;
+partition "Write path: mutateCommand()" {
+  :Требуется загруженная revision,\nиначе RevisionRequiredError;
+  :SELECT mutation_receipts\nпо (family_id, mutation_id);
+  if (квитанция найдена?) then (да)
+    :assertMatchingReceipt:\nтот же operation и request_hash;
+    :duplicate = true,\nrebased = expectedRevision != current;
+    :вернуть текущую revision без записи;
+    stop
+  else (нет)
+    :commandWriteTargets(operation):\nroute-scoped набор коллекций;
+    if (write set зарегистрирован?) then (нет)
+      :ошибка конфигурации маршрута;
+      stop
+    else (да)
+    endif
+  endif
+
+  partition "persistedTransaction()" {
+    :export snapshot текущего образа в память;
+    :BEGIN IMMEDIATE;
+    :повторная проверка квитанции внутри транзакции;
+    if (expectedRevision > server revision?) then (да)
+      :RevisionConflictError 409;
+      :ROLLBACK;
+      stop
+    else (нет)
+    endif
+    :getAppData(familyId, actor);
+    :apply mutator;
+    :assertWriteSetCoversChanges:\nкоманда не имеет права трогать\nчужие коллекции;
+    if (write set реально изменился?) then (да)
+      :replaceFamilyData(familyId, next, writeTargets);
+      :setFamilyRevision(revision + 1);
+    else (нет)
+      :revision не меняется;
+    endif
+    :INSERT mutation_receipts\n(operation, request_hash, revision);
+    :DELETE квитанций старше retention окна;
+    :COMMIT;
+
+    :persist(): tmp-файл 0600, fsync,\nrename, fsync директории;
+    if (persist ok?) then (да)
+      :записать persist_duration;
+    else (нет)
+      :persist_failure += 1;
+      :восстановить in-memory образ\nиз snapshot, снятого до транзакции;
+      :вернуть ошибку;
+      stop
+    endif
+  }
+}
+
+:Return {revision, data, command:{mutationId, duplicate, rebased}};
 stop
 
-@enduml
+note right
+Legacy mutate() сохранён для внутренних
+операций и требует строгого равенства
+revision: любое расхождение сразу 409.
+Route-scoped mutateCommand вместо этого
+разрешает rebase, потому что участники семьи
+пишут в разные коллекции параллельно.
+end note
 
+note right
+Snapshot до транзакции существует только
+ради отката in-memory образа при неудачном
+persist. Он не восстанавливается поверх
+живого SQLite-файла в проде.
+end note
+
+@enduml

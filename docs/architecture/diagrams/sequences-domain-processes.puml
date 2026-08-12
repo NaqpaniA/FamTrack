@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - доменные последовательности
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -24,8 +24,11 @@ actor "Участник" as Member
 participant "UI/store.ts" as Store
 participant "HTTP API" as API
 participant "RBAC" as RBAC
+participant "Домен\nserver/*.ts" as Domain
 participant "FamTrackDatabase" as DB
 database "SQLite" as SQLite
+participant "Serial job queue" as Queue
+participant "receipt-ocr sidecar" as OCR
 participant "AI helper policy" as AI
 
 group Invite: создание и принятие
@@ -40,6 +43,12 @@ group Invite: создание и принятие
 
   Member -> Store : Открыть ссылку invite
   Store -> API : POST /api/family/invites/accept
+  note right of API
+    Единственный authenticated маршрут,
+    который обрабатывается до
+    resolveRequestContext: у участника
+    ещё нет семьи.
+  end note
   API -> DB : acceptFamilyInvite(token, auth)
   DB -> SQLite : SELECT invite
   alt invite не найден
@@ -57,54 +66,131 @@ group Invite: создание и принятие
 end
 
 group Завершение задачи
-  Member -> Store : toggleTaskStatus(DONE)
-  Store -> Store : task.status = DONE
-  Store -> Store : assignee.xp += task.points
-  Store -> Store : rewardLog EARNED
-  Store -> Store : event TASK_COMPLETED
-  alt recurring task
-    Store -> Store : создать следующий task instance
+  Member -> Store : Перевести задачу в DONE
+  Store -> API : POST /api/tasks/status\n{taskId, status, mutationId, revision}
+  note right of Store
+    UI больше не считает XP и не пишет
+    снимок состояния. Редактор задачи
+    отправляет строго save -> status,
+    а per-task pending guard не пускает
+    второй запрос по той же задаче.
+  end note
+  API -> Domain : changeTaskStatus(data, command, actor)
+  Domain -> RBAC : проверка роли и\nallowParentTaskCompletion
+  Domain -> Domain : XP по difficulty и priority,\nодин reward log, completed_at/by
+  alt задача - occurrence рутины
+    Domain -> Domain : закрыть occurrence,\nоткрыть следующую
   end
-  Store -> API : POST /api/batch\n{tasks, members, rewardLogs, events}
-  API -> RBAC : sanitizeBatchUpdates()
-  RBAC --> API : allowed
-  API -> DB : mutate()
+  Domain --> DB : next AppData
   DB -> SQLite : replace tasks/users/reward_logs/events
-  DB --> API : next revision
+  DB --> API : {revision, data, command}
   API --> Store : filtered AppData
+  note right of API
+    Детальный контракт статусов и XP:
+    task-status-command.puml,
+    рутины и accumulator: adr-009/*.
+  end note
 end
 
-group Финансовый взнос в копилку
+group Взнос в копилку
   Member -> Store : contributeToGoal(goal, amount, account)
-  Store -> Store : UX validation amount > 0
-  Store -> Store : UX validation account.balance >= amount
-  Store -> Store : account.balance -= amount
-  Store -> Store : goal.currentAmount += amount
-  Store -> Store : create contribution
-  Store -> Store : create transaction category goal_contrib
-  Store -> Store : event GOAL_CONTRIBUTION
-  Store -> API : POST /api/batch
-  API -> RBAC : finance write role check
-  RBAC --> API : allowed or 403
-  API -> DB : mutate()
-  DB -> SQLite : replace finance tables and events
-  API --> Store : next envelope
+  Store -> API : POST /api/savings-goals/contribute\n{goalId, sourceAccountId, amount, message}
+  API -> RBAC : assertCanWrite(finance)
+  RBAC --> API : allowed или 403
+  API -> Domain : contributeToSavingsGoal()
+  Domain -> Domain : проверить остаток счёта,\nсписать, увеличить goal,\nсоздать contribution и transaction
+  Domain --> DB : next AppData
+  DB -> SQLite : replace accounts, savings_goals,\ngoal_contributions, transactions, events
+  DB --> API : next envelope
+  API --> Store : согласованное состояние
+  note right of Domain
+    Списание и зачисление считаются
+    на сервере в одной команде, чтобы
+    остаток счёта не разъезжался при
+    параллельных взносах.
+  end note
 end
 
 group Заметка
   Member -> Store : saveNote(note)
   Store -> API : POST /api/notes/save
   API -> RBAC : canWriteNote()
-  API -> DB : mutate(saveNote)
-  DB -> DB : normalizeNote()
+  API -> Domain : saveNote(data, note, actor)
+  Domain -> Domain : normalizeNote()
   alt новая FAMILY note
-    DB -> SQLite : INSERT notes
-    DB -> SQLite : INSERT NOTE_CREATED event
+    Domain -> SQLite : INSERT notes\n+ NOTE_CREATED event
   else update
-    DB -> SQLite : UPDATE via replaceFamilyData
+    Domain -> SQLite : UPDATE через replaceFamilyData
   end
-  DB --> API : next envelope
+  Domain --> API : next envelope
   API --> Store : filtered notes
+end
+
+group Покупка по штрихкоду
+  Member -> Store : Отсканировать товар
+  Store -> API : POST /api/purchase-imports\n{source: BARCODE, stockOnly}
+  API -> Domain : createPurchaseImport()
+  Domain --> API : draft job
+  Store -> API : POST /api/purchase-imports/{id}/barcodes
+  API -> Domain : addPurchaseBarcode()
+  Domain -> Domain : сопоставить barcode\nс pantry_products
+  Store -> API : POST /api/purchase-imports/{id}/confirm
+  API -> Domain : confirmPurchaseImport()
+  Domain -> Domain : adjustPantry(PURCHASE)\nпо отмеченным позициям
+  Domain -> SQLite : pantry_movements + закрытие\nсвязанных shopping_items
+  Domain --> API : PURCHASE_IMPORT_CONFIRMED
+  API --> Store : обновлённые запасы
+end
+
+group Покупка по чеку с OCR
+  Member -> Store : Сфотографировать чек
+  Store -> API : POST /api/purchase-imports\n{source: RECEIPT}
+  loop до 3 страниц
+    Store -> API : POST /api/purchase-imports/{id}/files/{page}\nбинарно, X-FamTrack-File-SHA256
+    API -> API : inspectReceiptImage,\nсверка объявленного hash
+    API -> Domain : attachPurchaseImportFile()
+    note right of API
+      Файл пишется на диск только после
+      проверки видимости job для актора,
+      а при неудачной команде удаляется.
+    end note
+  end
+  Store -> API : POST /api/purchase-imports/{id}/process
+  API -> Domain : queuePurchaseImport()
+  API -> Queue : enqueue(familyId, importId)
+  Queue -> Domain : claim (internal command)
+  Queue -> OCR : recognize(files)
+  alt распознано
+    OCR --> Queue : blocks + parsed items
+    Queue -> Domain : applyPurchaseImportOcr()\nстатус REVIEW_REQUIRED
+  else ошибка
+    OCR --> Queue : error
+    Queue -> Domain : failPurchaseImport(code, retryable)
+    alt retryable
+      Queue -> Queue : scheduleReceiptRetry(retryCount)
+    end
+  end
+  Member -> Store : Проверить и отметить позиции
+  Store -> API : POST /api/purchase-imports/{id}/items/{itemId}
+  Member -> Store : Подтвердить покупку
+  Store -> API : POST /api/purchase-imports/{id}/confirm
+  API -> Domain : confirmPurchaseImport()
+  alt stockOnly
+    Domain -> Domain : только pantry-движения
+  else расход по счёту
+    Domain -> RBAC : CHILD не подтверждает трату
+    Domain -> Domain : один EXPENSE transaction\n+ pantry-движения
+  end
+  Domain -> SQLite : transactions, pantry_movements,\nshopping_items, purchase_imports
+  Domain --> API : confirmedResult\n{transactionId, pantryMovementIds,\nclosedShoppingItemIds}
+  API --> Store : итог покупки
+  note right of Queue
+    Страницы чека удаляются по
+    retentionUntil, а прерванные job
+    восстанавливаются при старте
+    процесса через recoverReceiptQueue.
+    Детальные контракты: adr-010/*.
+  end note
 end
 
 group AI helper
@@ -130,4 +216,3 @@ group AI helper
 end
 
 @enduml
-

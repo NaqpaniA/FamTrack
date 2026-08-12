@@ -63,8 +63,9 @@ events. React Query хранит серверное состояние в cache 
 
 Клиентские проверки нужны для UX, но не считаются security boundary. Например,
 клиент может не показывать кнопку редактирования, но backend всё равно должен
-отклонить запрещённый write через `assertCanWrite()` или
-`sanitizeBatchUpdates()`.
+отклонить запрещённый write через `assertCanWrite()` и route-scoped write set.
+`sanitizeBatchUpdates()` остаётся в `server/rbac.ts`, но после отключения
+`/api/batch` не стоит ни на одном живом write-пути.
 
 ## 4. Backend API LLD
 
@@ -80,7 +81,12 @@ events. React Query хранит серверное состояние в cache 
 | `GET /api/health` | Статус работоспособности, revision, tenant mode, auth mode, model metadata | Не требует Telegram auth |
 | `GET /api/app-data` | Загрузка текущего family aggregate с фильтрацией под актора | Telegram/init internal |
 | `GET /api/users/{id}/avatar` | Приватный raster proxy через Telegram Bot API | Telegram/init + same-family target |
-| `POST /api/batch` | Legacy strict-revision compound update; app/bot/MCP его не вызывают | Telegram/init internal |
+| `POST /api/batch` | Отключён: всегда `410 BATCH_COMMAND_DISABLED`; сохранён, чтобы старый клиент получил явную ошибку вместо тихой потери записи | Telegram/init internal |
+| `POST /api/users/*` | Save/update, archive/restore, check-in и dashboard preferences | Role/domain checks |
+| `POST /api/routines/*` | Save, pause, skip, complete и record-unit; feature `routines` | Role/domain checks |
+| `POST /api/wishlists/*` | Списки и позиции желаний, reserve/release; feature `wishlists` | Role/domain checks |
+| `POST /api/pantry/adjust`, `POST /api/pantry/{productId}/adjust` | Движения запасов поверх immutable ledger; feature `pantry` | Role/domain checks |
+| `GET/POST /api/purchase-imports/*` | Draft покупки, barcodes, страницы чека, process, review и atomic confirm; features `pantry`/`receiptOcr` | Actor ownership + role |
 | `POST /api/tasks/*` | Save, delete, reorder задач | Telegram/init internal |
 | `POST /api/epics/*` | Save/delete проектов | Telegram/init internal |
 | `POST /api/family/settings` | Политики completion и уведомлений | Parent role |
@@ -110,8 +116,9 @@ events. React Query хранит серверное состояние в cache 
 8. В одной транзакции записать state, новую revision и receipt.
 9. Атомарно сохранить файл, отфильтровать результат и вернуть envelope.
 
-Legacy `/api/batch` остаётся на строгом `mutate()` и требует точного совпадения
-revision; это rollout-совместимость, а не основной write protocol.
+Snapshot-записи через `/api/batch` полностью сняты: маршрут отвечает `410`
+с кодом `BATCH_COMMAND_DISABLED`. Строгий `mutate()` сохранён только для
+внутренних операций вроде принятия invite и требует точного совпадения revision.
 
 ### 4.3. Ошибки
 
@@ -120,7 +127,10 @@ revision; это rollout-совместимость, а не основной wr
 | 400 | Неверный JSON, невалидный payload, неверная роль или параметры |
 | 401 | Отсутствует или невалиден Telegram `initData`, либо internal secret |
 | 403 | Telegram user валиден, но не связан с активным профилем или не имеет прав |
-| 409 | Конфликт `mutationId`, доменный конфликт, future revision или stale revision legacy batch |
+| 404 | Маршрут не найден либо домен выключен feature flag: `FEATURE_DISABLED` |
+| 409 | Конфликт `mutationId`, доменный конфликт или future revision |
+| 410 | `POST /api/batch`: snapshot-записи сняты |
+| 422 | Доменная валидация: пустой review покупки, расход без счёта или суммы |
 | 428 | Write начат до загрузки актуальной server revision |
 | 413 | Слишком большое тело запроса или AI input |
 | 429 | Достигнут дневной family limit для AI helper |
@@ -153,10 +163,15 @@ Telegram ID или username отклоняются до доступа к family
 
 `server/rbac.ts` реализует четыре уровня:
 
-- `filterForActor()` - read filtering.
+- `filterForActor()` - read filtering, включая spoiler-safe wishlists.
 - `assertCanWrite()` - route-level write checks.
-- `sanitizeBatchUpdates()` - ограничения для broad batch update.
+- Route-scoped write set - команда не может изменить коллекции чужого домена.
+- Доменные проверки внутри мутаторов - для рутин, наград, чек-инов и purchase
+  capture правило зависит от целевой сущности, а не только от маршрута.
 - Note-specific checks - отдельная логика для personal/family notes.
+
+`sanitizeBatchUpdates()` сохранён в модуле как исторический guardrail снятого
+`/api/batch` и не участвует в текущих write-путях.
 
 Роли:
 

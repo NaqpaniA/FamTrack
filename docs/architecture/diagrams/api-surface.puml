@@ -1,114 +1,140 @@
 @startuml
 title
 FamTrack - карта HTTP API
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
 skinparam shadowing false
 skinparam roundcorner 10
 skinparam defaultFontName "DejaVu Sans"
+skinparam nodesep 12
+skinparam ranksep 24
 skinparam component {
   BackgroundColor #F8FAFC
   BorderColor #334155
 }
 skinparam packageStyle rectangle
 
-package "Public health" as PublicHealth #DCFCE7 {
-  [GET /api/health\nreadiness metadata] as Health
+package "Публичный контур" as PublicHealth #DCFCE7 {
+  [GET /api/health\n{db health, authMode, tenantMode,\naiModel, capabilities}\nединственный маршрут без auth] as Health
 }
 
-package "Authenticated read model" as ReadModel #E0F2FE {
-  [GET /api/app-data\n{revision, filtered AppData}] as AppData
+package "Internal контур\nx-famtrack-agent-secret" as InternalApi #F1F5F9 {
+  [GET /api/internal/metrics\nruntime + database + health] as InternalMetrics
+  [GET /api/internal/reminders/due\nкандидаты напоминаний по всем семьям] as InternalReminders
 }
 
-package "Family management" as FamilyApi #FEF3C7 {
-  [POST /api/family/invites\nсоздать invite] as CreateInvite
-  [POST /api/family/invites/accept\nпринять invite] as AcceptInvite
-  [POST /api/users/save|update] as SaveUser
-  [POST /api/users/archive|restore] as UserArchive
+package "Read model" as ReadModel #E0F2FE {
+  [GET /api/app-data\n{revision, filtered AppData}\nETag + If-None-Match -> 304] as AppData
+  [GET /api/users/{id}/avatar\nserver-side Telegram fallback] as Avatar
+  [GET /api/purchase-imports\nGET /api/purchase-imports/{id}] as PurchaseRead
+  [GET /api/purchase-imports/{id}/ocr-blocks\nGET /api/purchase-imports/{id}/files/{1..3}\nfeature: receiptOcr] as ReceiptRead
 }
 
-package "Task and project commands" as TaskApi #EDE9FE {
-  [POST /api/tasks/save] as TaskSave
-  [POST /api/tasks/delete] as TaskDelete
-  [POST /api/tasks/reorder] as TaskReorder
-  [POST /api/epics/save] as EpicSave
-  [POST /api/epics/delete] as EpicDelete
+package "Семья и участники" as FamilyApi #FEF3C7 {
+  [POST /api/family/invites\nPOST /api/family/invites/accept\naccept принимается\nдо resolveRequestContext] as Invites
+  [POST /api/users/save | update\nPOST /api/users/archive | restore\nPOST /api/users/check-in] as Members
+  [POST /api/users/preferences\nfeature: routines\nPOST /api/family/settings\nтолько OWNER/ADMIN] as Preferences
 }
 
-package "Finance commands" as FinanceApi #FFE4E6 {
-  [POST /api/accounts/save] as AccountSave
-  [POST /api/transactions/save] as TxSave
-  [POST /api/goals/save] as GoalSave
-  [POST /api/budgets/save] as BudgetSave
-  [POST /api/savings-goals/save] as SavingsSave
-  [POST /api/contributions/save] as ContributionSave
-  [POST /api/subscriptions/save] as SubscriptionSave
+package "Задачи и проекты" as TaskApi #EDE9FE {
+  [POST /api/tasks/save\nPOST /api/tasks/delete\nPOST /api/tasks/reorder] as TaskWrite
+  [POST /api/tasks/status\nдвухшаговый save -> status] as TaskStatus
+  [POST /api/epics/save\nPOST /api/epics/delete\nотвязывает tasks и goals] as EpicWrite
+  [POST /api/notes/save\nPOST /api/notes/delete] as Notes
 }
 
-package "Collaboration and rewards" as CollaborationApi #F0FDF4 {
-  [POST /api/notes/save|delete] as Notes
-  [POST /api/reward-logs/save] as RewardLogs
-  [POST /api/inventory/save] as Inventory
-  [POST /api/batch\ncompound update] as Batch
+package "Routine engine\nfeature: routines" as RoutineApi #DBEAFE {
+  [POST /api/routines/save\nPOST /api/routines/pause\nPOST /api/routines/skip] as RoutineManage
+  [POST /api/routines/record-unit\nтолько накопление, без XP] as RoutineUnit
+  [POST /api/routines/complete\nбатч платит baseXp x N + streak;\nдоступен и при скрытом routines,\nесли occurrence уже мигрирована] as RoutineComplete
 }
 
-package "AI helpers" as AiApi #FAE8FF {
-  [POST /api/ai/task-breakdown] as TaskAi
-  [POST /api/ai/expense-analysis] as ExpenseAi
+package "Финансы" as FinanceApi #FFE4E6 {
+  [POST /api/accounts/save\nPOST /api/transactions/save\nPOST /api/goals/save\nPOST /api/budgets/save] as FinanceCore
+  [POST /api/savings-goals/save\nPOST /api/savings-goals/contribute\nPOST /api/contributions/save] as SavingsApi
+  [POST /api/subscriptions/save\nPOST /api/subscriptions/delete\nPOST /api/subscriptions/pay] as SubscriptionApi
 }
 
-package "Internal operations" as InternalApi #F1F5F9 {
-  [GET /api/internal/metrics\nrequires internal secret] as InternalMetrics
+package "Мотивация и желания" as RewardApi #F0FDF4 {
+  [POST /api/rewards/save\nPOST /api/rewards/archive\nтолько OWNER/ADMIN] as RewardManage
+  [POST /api/rewards/purchase\nPOST /api/rewards/use] as RewardSpend
+  [POST /api/wishlists/save\nPOST /api/wishlists/items/save | delete\nPOST /api/wishlists/items/reserve | release\nfeature: wishlists] as WishlistApi
 }
 
-[validateRequestAuth] as Auth
-[resolveRequestContext] as Context
-[assertCanWrite] as WriteCheck
-[sanitizeBatchUpdates] as BatchGuard
-[FamTrackDatabase.mutate] as Mutate
-[filterForActor] as Filter
+package "Покупки и запасы" as PurchaseApi #FFEDD5 {
+  [POST /api/shopping/items/add\nPOST /api/shopping/items/set-completed\nPOST /api/shopping/items/delete\nPOST /api/shopping/checkout] as ShoppingApi
+  [POST /api/pantry/adjust\nPOST /api/pantry/{productId}/adjust\nfeature: pantry] as PantryApi
+  [POST /api/purchase-imports\nPOST /api/purchase-imports/{id}\nPOST /api/purchase-imports/{id}/barcodes\nPOST /api/purchase-imports/{id}/items/{itemId}\nPOST /api/purchase-imports/{id}/cancel\nPOST /api/purchase-imports/{id}/confirm] as ImportApi
+  [POST /api/purchase-imports/{id}/files/{1..3}\nбинарная загрузка; обязательны\nx-famtrack-mutation-id и x-famtrack-file-sha256\nPOST /api/purchase-imports/{id}/process\nfeature: receiptOcr] as ReceiptApi
+}
 
-Health --> [FamTrackDatabase.health]
-AppData --> Auth
-CreateInvite --> Auth
-AcceptInvite --> Auth
-SaveUser --> Auth
-UserArchive --> Auth
-TaskSave --> Auth
-TaskDelete --> Auth
-TaskReorder --> Auth
-EpicSave --> Auth
-EpicDelete --> Auth
-AccountSave --> Auth
-TxSave --> Auth
-GoalSave --> Auth
-BudgetSave --> Auth
-SavingsSave --> Auth
-ContributionSave --> Auth
-SubscriptionSave --> Auth
-Notes --> Auth
-RewardLogs --> Auth
-Inventory --> Auth
-Batch --> Auth
-TaskAi --> Auth
-ExpenseAi --> Auth
-InternalMetrics --> Auth
+package "AI helpers и снятые маршруты" as AiApi #FAE8FF {
+  [POST /api/ai/task-breakdown\nPOST /api/ai/expense-analysis\nучёт в ai_usage] as AiHelpers
+  [POST /api/batch\n410 BATCH_COMMAND_DISABLED\nsnapshot-записи заменены\nroute-scoped командами] as Batch #FEE2E2
+}
 
-Auth --> Context
-Context --> WriteCheck
-WriteCheck --> Mutate
-Batch --> BatchGuard
-BatchGuard --> Mutate
-Mutate --> Filter
-AppData --> Filter
+package "Конвейер запроса" as Pipeline #FFFFFF {
+  [validateRequestAuth\nTelegram initData или internal secret] as Auth
+  [resolveRequestContext\nfamilyId + actor из свежих members] as Context
+  [requireFeature\nrunnable capabilities] as Feature
+  [assertCanWrite\nRBAC по маршруту] as WriteCheck
+  [FamTrackDatabase.mutateCommand\nmutation_receipts + revision] as Mutate
+  [filterForActor\nвидимость и spoiler-safe проекция] as Filter
+  [applyCapabilities\nвырезает выключенные домены] as Capabilities
+
+  Auth --> Context
+  Context --> Feature
+  Feature --> WriteCheck
+  WriteCheck --> Mutate
+  Mutate --> Filter
+  Filter --> Capabilities
+}
+
+Health -[hidden]right- InternalMetrics
+InternalReminders -[hidden]right- AppData
+Health -[hidden]down- Invites
+InternalMetrics -[hidden]down- TaskWrite
+AppData -[hidden]down- RoutineManage
+Invites -[hidden]down- FinanceCore
+TaskWrite -[hidden]down- RewardManage
+RoutineManage -[hidden]down- ShoppingApi
+FinanceCore -[hidden]down- AiHelpers
+RewardManage -[hidden]down- Auth
+
+InternalMetrics ..> Auth
+AppData ..> Auth
+Members ..> Auth
+TaskStatus ..> Auth
+RoutineComplete ..> Auth
+SavingsApi ..> Auth
+RewardSpend ..> Auth
+ImportApi ..> Auth
+AiHelpers ..> Auth
+
+note right of Mutate
+Каждая команда несёт mutationId и revision.
+Повтор с тем же mutationId и request hash
+возвращает duplicate=true и прежнюю revision.
+Расхождение revision разрешается rebase
+или отклоняется как 409.
+end note
+
+note right of WriteCheck
+sendAuthorizedCommand добавляет assertCanWrite
+перед мутатором. Команды рутин, наград, чек-инов
+и purchase capture проверяют роль внутри мутатора,
+потому что правило зависит от целевой сущности.
+end note
 
 legend bottom
-  Все POST, кроме invite accept special flow, возвращают либо JSON-result,
-  либо envelope {revision, data}. Revision conflict возвращает 409.
+  Пунктир показывает один представительный маршрут группы: через конвейер идут все
+  маршруты, кроме GET /api/health, а GET-чтения останавливаются на filterForActor.
+  Все команды отвечают {revision, data, command:{mutationId, duplicate, rebased}}.
+  Ответ команды содержит ETag семьи; чтение отвечает 304 на совпадающий If-None-Match.
+  requireFeature закрывает выключенный домен кодом FEATURE_DISABLED (404).
 endlegend
 
 @enduml
-

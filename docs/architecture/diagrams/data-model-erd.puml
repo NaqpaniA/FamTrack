@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - полная ERD persisted-модели
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -16,6 +16,7 @@ skinparam class {
   ArrowColor #475569
 }
 
+
 entity "schema_migrations\nглобальная история миграций" as schema_migrations {
   * version : TEXT
   --
@@ -28,6 +29,17 @@ entity "app_state\nlegacy/global state" as app_state {
   value : TEXT
 }
 
+entity "mutation_receipts\nidempotency-квитанции команд" as mutation_receipts {
+  * family_id : TEXT
+  * mutation_id : TEXT
+  --
+  actor_id : TEXT
+  operation : TEXT
+  request_hash : TEXT
+  revision : INTEGER
+  created_at : INTEGER
+}
+
 entity "families\ntenant root" as families {
   * id : TEXT
   --
@@ -35,6 +47,7 @@ entity "families\ntenant root" as families {
   owner_user_id : TEXT
   revision : INTEGER
   created_at : INTEGER
+  settings_json : TEXT
 }
 
 entity "family_invites\nсемейные invite tokens" as family_invites {
@@ -61,9 +74,21 @@ entity "users\nучастники семьи" as users {
   is_active : INTEGER
   telegram_id : INTEGER
   telegram_username : TEXT
+  telegram_first_name : TEXT
+  telegram_last_name : TEXT
+  avatar_url : TEXT
   streak : INTEGER
   last_login_date : TEXT
 }
+
+entity "user_preferences\nличные настройки участника" as user_preferences {
+  * family_id : TEXT
+  * user_id : TEXT
+  --
+  data_json : TEXT
+}
+
+
 
 entity "epics\nпроекты" as epics {
   * id : TEXT
@@ -78,7 +103,7 @@ entity "epics\nпроекты" as epics {
   visible_to_json : TEXT
 }
 
-entity "tasks\nзадачи" as tasks {
+entity "tasks\nзадачи и occurrences рутин" as tasks {
   * id : TEXT
   --
   family_id : TEXT
@@ -86,6 +111,7 @@ entity "tasks\nзадачи" as tasks {
   description : TEXT
   status : TEXT
   priority : TEXT
+  difficulty : TEXT
   points : INTEGER
   assignee_id : TEXT
   created_by_id : TEXT
@@ -98,7 +124,40 @@ entity "tasks\nзадачи" as tasks {
   visible_to_json : TEXT
   is_recurring : INTEGER
   frequency : TEXT
+  notification_mode : TEXT
+  completed_at : INTEGER
+  completed_by_id : TEXT
+  rewarded_at : INTEGER
+  captured_at : INTEGER
+  next_action : TEXT
+  estimate_minutes : INTEGER
+  depends_on_ids_json : TEXT
+  routine_template_id : TEXT
+  routine_occurrence_key : TEXT
+  routine_due_at : INTEGER
+  routine_units : INTEGER
+  routine_rewarded_units : INTEGER
 }
+
+entity "routine_templates\nшаблоны рутин" as routine_templates {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  data_json : TEXT
+}
+
+entity "routine_events\nжурнал routine engine" as routine_events {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  routine_id : TEXT
+  type : TEXT
+  actor_id : TEXT
+  timestamp : INTEGER
+  data_json : TEXT
+}
+
+
 
 entity "accounts\nсчета" as accounts {
   * id : TEXT
@@ -189,6 +248,8 @@ entity "transactions\nфинансовый ledger" as transactions {
   deviation_reason : TEXT
 }
 
+
+
 entity "rewards\nкаталог наград" as rewards {
   * id : TEXT
   --
@@ -197,6 +258,9 @@ entity "rewards\nкаталог наград" as rewards {
   cost : INTEGER
   icon : TEXT
   description : TEXT
+  is_active : INTEGER
+  created_by_id : TEXT
+  updated_at : INTEGER
 }
 
 entity "reward_logs\nжурнал XP" as reward_logs {
@@ -221,6 +285,15 @@ entity "inventory\nкупленные награды" as inventory {
   used_at : INTEGER
 }
 
+entity "wishlists\nсписки желаний" as wishlists {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  data_json : TEXT
+}
+
+
+
 entity "shopping_items\nсписок покупок" as shopping_items {
   * id : TEXT
   --
@@ -231,6 +304,63 @@ entity "shopping_items\nсписок покупок" as shopping_items {
   is_completed : INTEGER
   created_at : INTEGER
 }
+
+entity "pantry_products\nпозиции запасов" as pantry_products {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  data_json : TEXT
+}
+
+entity "pantry_movements\nдвижения запасов" as pantry_movements {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  product_id : TEXT
+  type : TEXT
+  quantity_delta : REAL
+  quantity_after : REAL
+  actor_id : TEXT
+  source_id : TEXT
+  rollback_of_id : TEXT
+  note : TEXT
+  created_at : INTEGER
+}
+
+entity "purchase_imports\ndraft-задания покупки" as purchase_imports {
+  * family_id : TEXT
+  * id : TEXT
+  --
+  actor_id : TEXT
+  status : TEXT
+  data_json : TEXT
+  created_at : INTEGER
+  updated_at : INTEGER
+}
+
+entity "purchase_import_items\nпозиции draft-покупки" as purchase_import_items {
+  * family_id : TEXT
+  * import_id : TEXT
+  * id : TEXT
+  --
+  data_json : TEXT
+}
+
+entity "purchase_import_files\nстраницы чека" as purchase_import_files {
+  * family_id : TEXT
+  * import_id : TEXT
+  * page : INTEGER
+  --
+  path : TEXT
+  mime_type : TEXT
+  size_bytes : INTEGER
+  sha256 : TEXT
+  width : INTEGER
+  height : INTEGER
+  created_at : INTEGER
+}
+
+
 
 entity "events\nactivity feed" as events {
   * id : TEXT
@@ -275,53 +405,54 @@ entity "ai_usage\nучёт AI helpers" as ai_usage {
   created_at : INTEGER
 }
 
+
 families ||--o{ users : family_id
-families ||--o{ family_invites : family_id
-families ||--o{ epics : family_id
 families ||--o{ tasks : family_id
+families ||--o{ routine_templates : family_id
 families ||--o{ accounts : family_id
-families ||--o{ financial_goals : family_id
-families ||--o{ savings_goals : family_id
-families ||--o{ goal_contributions : family_id
-families ||--o{ subscriptions : family_id
-families ||--o{ budgets : family_id
-families ||--o{ transactions : family_id
 families ||--o{ rewards : family_id
-families ||--o{ reward_logs : family_id
-families ||--o{ inventory : family_id
-families ||--o{ shopping_items : family_id
-families ||--o{ events : family_id
+families ||--o{ pantry_products : family_id
+families ||--o{ purchase_imports : family_id
 families ||--o{ notes : family_id
-families ||--o{ ai_usage : family_id
+families ||--o{ mutation_receipts : family_id
 
 families }o..|| users : owner_user_id
-family_invites }o..|| users : created_by_id
-epics }o..|| users : created_by_id
+user_preferences }o..|| users : user_id
 tasks }o..|| users : assignee_id
-tasks }o..|| users : created_by_id
+tasks }o..|| users : completed_by_id
 tasks }o..|| epics : epic_id
-accounts }o..|| users : created_by_id
+tasks }o..|| routine_templates : routine_template_id
+routine_events }o..|| routine_templates : routine_id
 financial_goals }o..|| accounts : account_id
 financial_goals }o..|| epics : epic_id
-savings_goals }o..|| users : created_by_id
 goal_contributions }o..|| savings_goals : goal_id
 goal_contributions }o..|| users : user_id
 subscriptions }o..|| accounts : account_id
 transactions }o..|| accounts : account_id
 transactions }o..|| accounts : to_account_id
-transactions }o..|| users : created_by_id
 reward_logs }o..|| users : user_id
 inventory }o..|| rewards : reward_id
 inventory }o..|| users : owner_id
-shopping_items }o..|| users : added_by_id
-events }o..|| users : actor_id
-notes }o..|| users : created_by_id
-notes }o..|| users : updated_by_id
-ai_usage }o..|| users : actor_id
+pantry_movements }o..|| pantry_products : product_id
+pantry_movements }o..o| pantry_movements : rollback_of_id
+purchase_imports ||--o{ purchase_import_items : (family_id, import_id)
+purchase_imports ||--o{ purchase_import_files : (family_id, import_id)
+purchase_import_items }o..o| pantry_products : pantryProductId
+purchase_import_items }o..o| shopping_items : shoppingItemId
+purchase_imports }o..o| transactions : resultTransactionId
 
 note top of families
 revision - optimistic concurrency token.
 Все write-запросы должны учитывать текущую revision.
+settings_json хранит FamilySettings:
+allowParentTaskCompletion, taskNotificationMode, timezone.
+end note
+
+note right of mutation_receipts
+Идемпотентность серверных команд.
+Повтор с тем же mutation_id и request_hash
+возвращает исходную revision без записи;
+конфликт hash отклоняется.
 end note
 
 note right of budgets
@@ -335,11 +466,89 @@ Composite primary key:
 Personal notes фильтруются по created_by_id.
 end note
 
+note bottom of routine_templates
+data_json = RoutineTemplate:
+kind (SCHEDULED | ACCUMULATOR), schedule,
+assignmentMode, assigneeIds, difficulty,
+priority, visibility, timezone, paused,
+nextOccurrenceDate, openTaskId,
+accumulatedUnits, unitLabel, streak.
+end note
+
+note bottom of routine_events
+data_json = RoutineEvent payload:
+taskId, occurrenceKey, units, xpAwarded,
+streak, streakBonus, onTime.
+type: CREATED | UPDATED | PAUSED | RESUMED |
+OCCURRENCE_OPENED | COMPLETED |
+UNIT_RECORDED | SKIPPED | MIGRATED.
+end note
+
+note bottom of tasks
+routine_* колонки связывают occurrence
+с шаблоном. routine_units - накопленные
+единицы партии, routine_rewarded_units -
+уже оплаченные XP единицы.
+end note
+
+note bottom of pantry_products
+data_json = PantryProduct:
+name, aliases, identifiers
+(EAN_8 | EAN_13 | UPC_A | INTERNAL),
+quantity, unit, location, lowStockThreshold.
+end note
+
+note bottom of purchase_imports
+data_json = PurchaseImportJob:
+source (BARCODE | RECEIPT), stockOnly,
+accountId, categoryId, merchant, totalAmount,
+pageCount, retryCount, errorCode,
+retentionUntil, sourceReceiptHash,
+ocrBlocks, qrText, confirmedResult.
+end note
+
+note bottom of purchase_import_files
+path - внутренний storage-путь.
+Он вырезается из всех client-facing payload.
+end note
+
+note bottom of wishlists
+data_json = Wishlist с вложенными items.
+reservedById скрывается от ownerId,
+чтобы не раскрывать сюрприз.
+end note
+
+note bottom of user_preferences
+data_json - личные UI-настройки участника:
+состав и порядок секций дашборда,
+privacy-флаги виджетов.
+end note
+
+note as BoundedContexts
+**Bounded contexts**
+
+**Платформа и tenancy:** schema_migrations, app_state, families,
+family_invites, users, user_preferences, mutation_receipts.
+**Задачи и рутины:** epics, tasks, routine_templates, routine_events.
+**Финансы:** accounts, financial_goals, savings_goals,
+goal_contributions, subscriptions, budgets, transactions.
+**Мотивация:** rewards, reward_logs, inventory, wishlists.
+**Запасы и purchase capture:** shopping_items, pantry_products,
+pantry_movements, purchase_imports, purchase_import_items,
+purchase_import_files.
+**Контент и телеметрия:** events, notes, ai_usage.
+end note
+
 legend bottom
-  Сплошные связи от families показывают tenant ownership.
-  Пунктирные связи показывают application-level references.
+  Все доменные таблицы tenant-scoped: family_id входит в каждую из них
+  и в её первичный или составной ключ. Сплошные связи от families показаны
+  только к якорной таблице каждого bounded context, чтобы схема оставалась
+  читаемой; остальные таблицы контекста принадлежат семье по тому же family_id.
+  Пунктирные связи показывают application-level references. Авторские колонки
+  created_by_id, updated_by_id, actor_id и added_by_id всюду ссылаются на users
+  и не нарисованы отдельно, чтобы не перегружать схему.
   SQLite schema не навязывает все foreign keys физически.
+  Ссылки, подписанные camelCase, живут внутри data_json.
 endlegend
 
 @enduml
-

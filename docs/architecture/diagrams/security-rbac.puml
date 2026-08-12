@@ -1,8 +1,8 @@
 @startuml
 title
 FamTrack - AuthN/AuthZ и RBAC
-Дата: 2026-08-10
-Источник: текущий worktree после ADR 006
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -82,23 +82,33 @@ if (route == family invite create?) then (invite)
   endif
 endif
 
-if (route == /api/batch?) then (batch)
-  :sanitizeBatchUpdates(actor, updates, currentData);
-  if (forbidden key or hidden item?) then (да)
-    :403 Forbidden;
-    stop
-  endif
-else (specific route)
+if (route == /api/batch?) then (снят)
+  :410 BATCH_COMMAND_DISABLED;
+  stop
+else (route-scoped команда)
   :assertCanWrite(actor, pathname, body, currentData);
   if (not allowed?) then (да)
     :403 Forbidden;
     stop
   endif
+  :доменная проверка внутри мутатора\nдля рутин, наград, чек-инов\nи purchase capture;
+  if (роль не подходит целевой сущности?) then (да)
+    :403 Forbidden;
+    stop
+  endif
 endif
 
-:FamTrackDatabase.mutate();
+:FamTrackDatabase.mutateCommand();
+:assertWriteSetCoversChanges\nпо route-scoped write set;
 :filterForActor(nextData, actor);
-:Вернуть {revision, data};
+:applyCapabilities(data, capabilities);
+:Вернуть {revision, data, command};
 stop
+
+note right
+sanitizeBatchUpdates() остаётся в server/rbac.ts
+как исторический guardrail снятого /api/batch
+и не стоит ни на одном живом write-пути.
+end note
 
 @enduml

@@ -1,8 +1,8 @@
 @startuml
 title
-FamTrack - вход, загрузка данных, мутации и conflict handling
-Дата: 2026-06-28
-Источник: FamTrack@768af344db91
+FamTrack - вход, загрузка данных, durable команды и conflict handling
+Дата: 2026-08-12
+Источник: FamTrack@1e24e6a50f13
 end title
 footer Построено по текущему worktree, включая незакоммиченные изменения
 
@@ -23,6 +23,7 @@ actor "Участник семьи" as User
 participant "Telegram WebView" as WebView
 participant "React Mini App" as Frontend
 participant "ServerAdapter\napi.ts" as Adapter
+database "IndexedDB outbox\noutbox.ts" as Outbox
 participant "HTTP API\nserver/index.ts" as Api
 participant "Auth\nserver/auth.ts" as Auth
 participant "RBAC\nserver/rbac.ts" as Rbac
@@ -31,11 +32,11 @@ database "SQLite" as SQLite
 
 group Загрузка приложения
   User -> WebView : Открывает Mini App
-  WebView -> Frontend : initData + themeParams
+  WebView -> Frontend : initData + themeParams + safe area
   Frontend -> Adapter : loadData()
   Adapter -> Api : GET /api/app-data\nX-Telegram-Init-Data
   Api -> Auth : validateRequestAuth(initData)
-  Auth -> Auth : HMAC Telegram initData
+  Auth -> Auth : HMAC Telegram initData\nи проверка max age
   Auth --> Api : AuthContext
   Api -> Db : resolveActor(auth)
   Db -> SQLite : SELECT active user\nby telegram_id/username
@@ -45,60 +46,116 @@ group Загрузка приложения
   SQLite --> Db : AppData rows
   Api -> Rbac : filterForActor(data, actor)
   Rbac --> Api : visible AppData
-  Api --> Adapter : {revision, data}
-  Adapter -> Adapter : latestRevision = revision
+  Api -> Api : applyCapabilities(data, capabilities)
+  Api --> Adapter : 200 {revision, data}\nETag: family revision
+  Adapter -> Adapter : latestRevision, latestData, latestEtag
+  Adapter -> Adapter : scheduleOutboxReplay()
   Adapter --> Frontend : React Query cache update
 end
 
+group Повторная загрузка без изменений
+  Adapter -> Api : GET /api/app-data\nIf-None-Match: latestEtag
+  Api -> Db : getRevision(familyId)
+  Db --> Api : та же revision
+  Api --> Adapter : 304 без тела
+  Adapter -> Adapter : отдать latestData\nи запустить outbox replay
+end
+
 group Успешная запись
-  User -> Frontend : Изменяет задачу/финансы/заметку
-  Frontend -> Frontend : Собрать payload
-  Frontend -> Frontend : Optimistic cache update\nесли mutation поддерживает rollback
-  Frontend -> Adapter : requestEnvelope(path, body)
-  Adapter -> Api : POST /api/...\n{revision: latestRevision, body}
+  User -> Frontend : Изменяет задачу, рутину,\nфинансы или запасы
+  Frontend -> Adapter : command(path, payload)
+  Adapter -> Adapter : createMutationId()
+  Adapter -> Outbox : put({mutationId, path,\nenvelope:{revision, ...payload}})
+  note right of Outbox
+    Запись переживает закрытие Mini App,
+    перезагрузку WebView и офлайн.
+    Бинарные страницы чека хранятся
+    как Blob до подтверждения.
+  end note
+  Adapter -> Adapter : requestQueue.enqueue\n(single-flight по всему outbox)
+  Adapter -> Api : POST /api/...\n{revision, mutationId, ...}\nX-FamTrack-Outbox-Retry
   Api -> Auth : validateRequestAuth()
   Auth --> Api : AuthContext
   Api -> Db : resolveActor()
-  Db --> Api : actor
-  Api -> Rbac : assertCanWrite()\nили sanitizeBatchUpdates()
+  Db --> Api : свежий actor
+  Api -> Rbac : assertCanWrite(actor, path, body, data)
   Rbac --> Api : allowed
-  Api -> Db : mutate(familyId, revision, mutator, actor)
-  Db -> SQLite : SELECT current revision
-  SQLite --> Db : same revision
+  Api -> Db : mutateCommand(familyId, revision,\nreceipt, mutator, actor)
+  Db -> SQLite : SELECT mutation_receipts\nпо (family_id, mutation_id)
+  SQLite --> Db : нет квитанции
   Db -> SQLite : BEGIN IMMEDIATE
-  Db -> SQLite : replace family rows
+  Db -> Db : assertWriteSetCoversChanges\n(route-scoped write set)
+  Db -> SQLite : replace только затронутые коллекции
   Db -> SQLite : UPDATE families.revision = revision + 1
+  Db -> SQLite : INSERT mutation_receipts
   Db -> SQLite : COMMIT
-  Db -> Db : persist exported bytes
-  Db --> Api : next envelope
+  Db -> Db : persist: tmp + fsync + rename
+  Db --> Api : {revision, data, command}
   Api -> Rbac : filterForActor(nextData, actor)
-  Api --> Adapter : {nextRevision, filteredData}
-  Adapter -> Adapter : latestRevision = nextRevision
-  Adapter --> Frontend : success
-  Frontend -> Frontend : invalidateQueries(KEYS.DATA)
+  Api --> Adapter : 200 {revision, data,\ncommand:{mutationId, duplicate:false, rebased}}\nETag: новая revision
+  Adapter -> Adapter : сверить command.mutationId\nс отправленным
+  Adapter -> Outbox : remove(mutationId)
+  Adapter --> Frontend : SaveState SAVED\nи обновлённые данные
 end
 
-group Конфликт ревизии
-  User -> Frontend : Отправляет write со stale cache
-  Adapter -> Api : POST /api/...\n{revision: oldRevision, body}
-  Api -> Db : mutate(...)
+group Обрыв связи и повтор
+  Adapter -> Api : POST /api/... (тот же mutationId)
+  Api --> Adapter : сеть оборвалась, ответ не получен
+  Adapter -> Outbox : attempts + 1, lastError
+  Adapter --> Frontend : SaveState SAVING (pending > 0)
+  ... соединение восстановлено ...
+  Adapter -> Api : POST /api/... (тот же mutationId)
+  Api -> Db : mutateCommand(...)
+  Db -> SQLite : SELECT mutation_receipts
+  SQLite --> Db : квитанция найдена
+  Db -> Db : assertMatchingReceipt:\noperation и request_hash совпали
+  Db --> Api : {revision, data,\ncommand:{duplicate:true}}
+  Api --> Adapter : 200, запись не повторилась
+  Adapter -> Outbox : remove(mutationId)
+end
+
+group Параллельная запись другого участника
+  Adapter -> Api : POST /api/...\n{revision: устаревшая, mutationId}
+  Api -> Db : mutateCommand(...)
   Db -> SQLite : SELECT current revision
-  SQLite --> Db : newer revision
-  Db --> Api : RevisionConflictError
-  Api --> Adapter : 409 {error}
-  Adapter --> Frontend : ApiError
-  Frontend -> Frontend : rollback optimistic cache
-  Frontend -> Adapter : GET /api/app-data
-  Adapter --> Frontend : актуальное состояние
+  SQLite --> Db : revision ушла вперёд
+  Db -> Db : expectedRevision < revision\n-> rebase поверх свежих данных
+  Db --> Api : {revision, data,\ncommand:{rebased:true}}
+  Api --> Adapter : 200 без конфликта
+  note right of Db
+    409 остаётся только для клиента,
+    чья revision опережает серверную,
+    то есть для рассинхронизированного состояния.
+  end note
+end
+
+group Команда, требующая проверки
+  Adapter -> Api : POST /api/...
+  Api --> Adapter : 4xx (RBAC, валидация, feature disabled)
+  Adapter -> Outbox : needsReview = true, lastError
+  Adapter --> Frontend : SaveState ATTENTION
+  User -> Frontend : Повторить вручную
+  Frontend -> Adapter : retryOutbox()
+  Adapter -> Outbox : сбросить attempts и needsReview
+  Adapter -> Api : повторная доставка
 end
 
 group Auth failure
-  Adapter -> Api : request without valid initData
+  Adapter -> Api : запрос без валидного initData
   Api -> Auth : validateRequestAuth()
   Auth --> Api : AuthError
   Api --> Adapter : 401
   Adapter --> Frontend : show error state
 end
 
-@enduml
+group Запись до загрузки
+  Frontend -> Adapter : command(path, payload)
+  Adapter --> Frontend : ApiError 428\n«Данные семьи ещё не загружены»
+  note right of Adapter
+    Команда без загруженной revision
+    не попадает в outbox: сервер обязан
+    получить осознанную базовую revision.
+  end note
+end
 
+@enduml

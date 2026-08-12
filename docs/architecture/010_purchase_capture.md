@@ -1,6 +1,6 @@
 # ADR 010: Pantry, barcode and receipt purchase capture
 
-**Статус:** ПРИНЯТО, production activation gated
+**Статус:** ПРИНЯТО; production активирован 2026-08-12
 **Дата:** 2026-08-11
 **Владение:** pantry, purchase imports, finance, shopping, receipt OCR
 
@@ -77,10 +77,12 @@ Open Food Facts разрешён только как optional cache-miss enrichm
 
 ## 6. Feature flags и security
 
-`PANTRY` и `RECEIPT_OCR` по умолчанию выключены. Camera разрешается Permissions
-Policy только при активном pantry. Bot token и OCR file path остаются server
-side. Все endpoints проверяют Telegram auth, family tenant и actor ownership;
-OWNER/ADMIN могут завершить child draft, но CHILD не может списать account.
+`PANTRY` и `RECEIPT_OCR` по умолчанию выключены; в production оба включены с
+2026-08-12, а OCR работает на Paddle 2.5.2 CPU-MKL-AVX из-за AVX-only CPU
+сервера. Camera разрешается Permissions Policy только при активном pantry.
+Bot token и OCR file path остаются server side. Все endpoints проверяют Telegram
+auth, family tenant и actor ownership; OWNER/ADMIN могут завершить child draft,
+но CHILD не может списать account.
 
 ## 7. Проверки
 
