@@ -102,8 +102,8 @@ def validate_inference(payload: dict[str, Any]) -> None:
     if payload.get("qrText") is not None and not isinstance(payload.get("qrText"), str):
         raise SmokeFailure("inference response has an invalid qrText value")
     blocks = payload.get("blocks")
-    if not isinstance(blocks, list):
-        raise SmokeFailure("inference response has no blocks array")
+    if not isinstance(blocks, list) or not blocks:
+        raise SmokeFailure("inference response has no recognized text blocks")
     for block in blocks:
         if not isinstance(block, dict) or not isinstance(block.get("text"), str):
             raise SmokeFailure("inference response contains an invalid text block")

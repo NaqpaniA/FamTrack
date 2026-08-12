@@ -1,10 +1,14 @@
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 python-multipart==0.0.20
-# The production i5-2400 supports AVX but not AVX2. Paddle 3.x Linux wheels
-# terminate with SIGILL on that CPU; the latest 2.x wheel remains compatible.
-numpy==1.26.4
+# Official CPU-MKL-AVX wheel for the production i5-2400. Newer generic Linux
+# wheels terminate with SIGILL or SIGSEGV on that AVX-without-AVX2 CPU.
+numpy==1.26.3
+protobuf==3.20.2
 opencv-python==4.6.0.66
 opencv-contrib-python==4.6.0.66
-paddlepaddle==2.6.2
-paddleocr==2.7.3
+# pdf2docx (a PaddleOCR dependency) requires the headless distribution too;
+# keep every package that provides cv2 on the exact same ABI/version.
+opencv-python-headless==4.6.0.66
+paddlepaddle @ https://paddle-wheel.bj.bcebos.com/2.5.2/linux/linux-cpu-mkl-avx/paddlepaddle-2.5.2-cp310-cp310-linux_x86_64.whl#sha256=16535c40d3b2ebb15e22c894fea7aab5d0a586bd81b749cd735e481c17428033
+paddleocr==2.7.0.3

@@ -25,6 +25,10 @@ def get_engine() -> PaddleOCR:
         engine = PaddleOCR(
             lang=os.getenv("PADDLEOCR_LANG", "ru"),
             use_angle_cls=False,
+            enable_mkldnn=False,
+            ir_optim=False,
+            cpu_threads=1,
+            ocr_version="PP-OCRv3",
             show_log=False,
             use_gpu=False,
         )
