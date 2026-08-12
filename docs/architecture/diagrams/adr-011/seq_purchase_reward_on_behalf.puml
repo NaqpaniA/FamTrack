@@ -1,0 +1,59 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title FamTrack — reward purchase on behalf of a child without Telegram
+footer Contract: beneficiary pays XP and owns the item; actor stays in the audit trail
+
+actor "Parent (OWNER/ADMIN)" as actor
+boundary "Shop UI (member picker)" as ui
+boundary "HTTP API" as api
+control "Policy / RBAC" as rbac
+control "Rewards domain" as rewards
+database "SQLite family aggregate" as db
+
+activate actor
+actor -> ui : buy reward for selected member
+activate ui
+ui -> api : POST /api/rewards/purchase\n{rewardId, targetUserId?, revision, mutationId}
+activate api
+api -> db : read mutation receipt + actor + family state
+activate db
+db --> api : duplicate receipt | current aggregate
+deactivate db
+
+alt exact duplicate mutationId
+  api --> ui : stored result; no second XP debit, no new revision
+else new command
+  api -> rbac : assertCanActOnBehalf(actor, targetUserId)
+  activate rbac
+  rbac --> api : allowed | DomainError
+  deactivate rbac
+
+  alt targetUserId set and actor is not family admin
+    api --> ui : 403 ON_BEHALF_FORBIDDEN
+  else target is not an active family member
+    api --> ui : 409 TARGET_MEMBER_NOT_FOUND
+  else beneficiary XP below reward cost
+    api --> ui : 409 NOT_ENOUGH_XP
+  else purchase allowed
+    api -> rewards : purchaseReward(data, rewardId, actor,\n{targetUserId})
+    activate rewards
+    rewards -> rewards : beneficiary = targetUserId ?? actor.id\ndebit beneficiary XP, recalc level
+    rewards -> rewards : inventory item ownerId = beneficiary\nRewardLog userId = beneficiary,\ndescription notes acting parent
+    rewards --> api : next aggregate + event(actor)
+    deactivate rewards
+    api -> db : BEGIN; members + inventory + reward log\n+ event + receipt; revision +1
+    activate db
+    db --> api : COMMIT, new revision
+    deactivate db
+    api --> ui : authoritative state\n(item in beneficiary backpack)
+  end
+end
+
+deactivate api
+ui --> actor : «Куплено для {имя ребёнка}»
+deactivate ui
+deactivate actor
+@enduml

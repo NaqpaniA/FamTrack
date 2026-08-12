@@ -35,6 +35,11 @@
 | [ADR 008](008_durable_writes_and_outbox.md) | Durable IndexedDB outbox, binary replay, ETag и route-scoped writes | FamTrack | current worktree | 2026-08-11 |
 | [ADR 009](009_routine_engine.md) | Routine schedules, accumulator batches, history, XP и streak | FamTrack | current worktree | 2026-08-11 |
 | [ADR 010](010_purchase_capture.md) | Pantry, local barcodes, receipt OCR и atomic expense + stock confirm | FamTrack | current worktree | 2026-08-11, активирован 2026-08-12 |
+| [ADR 011](011_child_identity_and_on_behalf_spending.md) | Ребёнок без Telegram: on-behalf траты XP и invite claim без сплита | FamTrack | `1e24e6a50f13` | 2026-08-12 |
+| [ADR 012](012_design_system.md) | Дизайн-система: токены, шкалы, геометрия нижней зоны, темы | FamTrack | `1e24e6a50f13` | 2026-08-12 |
+| [ADR 013](013_modular_monolith.md) | Модульный монолит: fail-fast tenant, allowlist, routes/policy, entitlements | FamTrack | `1e24e6a50f13` | 2026-08-12 |
+| [source](diagrams/adr-011/seq_purchase_reward_on_behalf.puml) / [SVG](diagrams/adr-011/seq_purchase_reward_on_behalf.svg) | Покупка награды от имени ребёнка без Telegram | FamTrack | `1e24e6a50f13` | 2026-08-12 |
+| [source](diagrams/adr-011/seq_invite_claim_existing_member.puml) / [SVG](diagrams/adr-011/seq_invite_claim_existing_member.svg) | Инвайт с привязкой к существующему placeholder-профилю | FamTrack | `1e24e6a50f13` | 2026-08-12 |
 
 Production-readiness delta от `2026-08-10` описан в
 [ADR 006](006_production_readiness.md). Он фиксирует обязательную серверную загрузку,
