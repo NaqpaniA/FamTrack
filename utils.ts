@@ -18,6 +18,8 @@ const TELEGRAM_SHELL_EVENTS = [
   'themeChanged'
 ] as const;
 
+const FULLSCREEN_DEFER_MS = 120;
+
 const finitePixel = (value: unknown) => (
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? `${Math.round(value)}px` : '0px'
 );
@@ -44,11 +46,8 @@ export const syncTelegramShellCss = () => {
   root.style.setProperty('--tg-viewport-height', finitePixel(webApp?.viewportHeight || window.innerHeight));
   root.style.setProperty('--tg-viewport-stable-height', finitePixel(webApp?.viewportStableHeight || webApp?.viewportHeight || window.innerHeight));
 
-  const safeTop = Number(webApp?.safeAreaInset?.top) || 0;
-  const contentTop = Number(webApp?.contentSafeAreaInset?.top) || 0;
   const androidFullscreenFallback = webApp?.platform === 'android'
-    && webApp?.isFullscreen === true
-    && Math.max(safeTop, contentTop) === 0;
+    && webApp?.isFullscreen === true;
   root.style.setProperty('--tg-fullscreen-fallback-top', androidFullscreenFallback ? '52px' : '0px');
 
   const bg = themeValue(theme, 'bg_color', dark ? '#101418' : '#f3f5f7');
@@ -111,12 +110,22 @@ export const TWA = {
   expand: () => getTelegramWebApp()?.expand?.(),
   requestFullscreen: () => {
       const webApp = getTelegramWebApp();
-      if (typeof webApp?.requestFullscreen !== 'function' || webApp.isFullscreen) return;
-      try {
-          webApp.requestFullscreen();
-      } catch {
-          // Older Telegram clients keep the expanded-height fallback.
+      if (typeof webApp?.requestFullscreen === 'function' && !webApp.isFullscreen) {
+          try {
+              webApp.requestFullscreen();
+          } catch {
+              // Older Telegram clients keep the expanded-height fallback.
+          }
       }
+      // Telegram updates fullscreen/safe-area fields at different points across Android builds.
+      // Sample all known timing windows in addition to the WebApp events registered above.
+      syncTelegramShellCss();
+      const frame = window.requestAnimationFrame(() => syncTelegramShellCss());
+      const deferred = window.setTimeout(() => syncTelegramShellCss(), FULLSCREEN_DEFER_MS);
+      return () => {
+          window.cancelAnimationFrame(frame);
+          window.clearTimeout(deferred);
+      };
   },
   setHeaderColor: (color: string) => {
       try { getTelegramWebApp()?.setHeaderColor?.(color); } catch { /* unsupported client */ }
@@ -132,6 +141,12 @@ export const TWA = {
   },
   close: () => getTelegramWebApp()?.close?.(),
   enableClosingConfirmation: () => getTelegramWebApp()?.enableClosingConfirmation?.(),
+  backButton: {
+      show: () => getTelegramWebApp()?.BackButton?.show?.(),
+      hide: () => getTelegramWebApp()?.BackButton?.hide?.(),
+      onClick: (handler: () => void) => getTelegramWebApp()?.BackButton?.onClick?.(handler),
+      offClick: (handler: () => void) => getTelegramWebApp()?.BackButton?.offClick?.(handler)
+  },
   // Haptic Feedback
   haptic: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => {
       getTelegramWebApp()?.HapticFeedback?.impactOccurred?.(style);

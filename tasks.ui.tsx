@@ -18,7 +18,9 @@ import {
   List as ListIcon,
   Kanban,
   Sparkles,
-  Loader2
+  Loader2,
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
 import {
   Task,
@@ -39,6 +41,7 @@ import { formatMoney, isVisible } from './utils'; // Generic utils
 import { FinancialGoal } from './finance.model';
 import { api } from './api';
 import type { TaskNotificationMode } from './settings.model';
+import type { TaskSaveFlowResult } from './task-save-flow';
 
 const TASK_STATUS_META: Record<TaskStatus, { label: string; shortLabel: string; color: string }> = {
     INBOX: { label: 'Входящие', shortLabel: 'Inbox', color: 'bg-violet-500' },
@@ -50,6 +53,8 @@ const TASK_STATUS_META: Record<TaskStatus, { label: string; shortLabel: string; 
     DROPPED: { label: 'Отменено', shortLabel: 'Отмена', color: 'bg-slate-400' }
 };
 const TASK_STATUSES = Object.keys(TASK_STATUS_META) as TaskStatus[];
+const NEW_TASK_STATUSES: TaskStatus[] = ['INBOX', 'TODO', 'WAITING'];
+export type TaskOwnershipFilter = 'ALL' | 'MINE';
 
 const reminderClock = (timestamp?: string) => {
     if (!timestamp) return '';
@@ -179,73 +184,92 @@ export const KanbanCard: React.FC<{
     onPointerUp?: (event: React.PointerEvent<HTMLButtonElement>) => void,
     onPointerCancel?: (event: React.PointerEvent<HTMLButtonElement>) => void,
     onStatusMove?: (status: TaskStatus) => void,
-    isDragging?: boolean
-}> = ({ task, assignee, epic, onClick, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onStatusMove, isDragging }) => {
+    isDragging?: boolean,
+    statusPending?: boolean
+}> = ({ task, assignee, epic, onClick, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onStatusMove, isDragging, statusPending = false }) => {
     const priorityConfig = PRIORITIES[task.priority];
     const overdue = isOverdue(task.dueDate) && task.status !== 'DONE';
+    const currentIndex = TASK_STATUSES.indexOf(task.status);
+    const previousStatus = TASK_STATUSES[currentIndex - 1];
+    const nextStatus = TASK_STATUSES[currentIndex + 1];
+    const canMove = !!onStatusMove && !task.routineTemplateId;
 
     return (
-        <button
-            type="button"
+        <div
             data-kanban-task={task.id}
-            onClick={onClick}
-            aria-label={`Открыть задачу «${task.title}». Стрелки влево и вправо меняют статус.`}
-            onKeyDown={event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    onClick();
-                    return;
-                }
-                if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && onStatusMove) {
-                    const statuses = TASK_STATUSES;
-                    const currentIndex = statuses.indexOf(task.status);
-                    const direction = event.key === 'ArrowLeft' ? -1 : 1;
-                    const nextStatus = statuses[currentIndex + direction];
-                    if (nextStatus) {
-                        event.preventDefault();
-                        onStatusMove(nextStatus);
-                    }
-                }
-            }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerCancel}
-            className={`w-full touch-none select-none bg-white p-2.5 rounded-[12px] shadow-sm border mb-2 active:scale-95 transition-transform text-left ${isDragging ? 'opacity-60 border-blue-300 ring-2 ring-blue-100' : 'border-gray-100'}`}
+            className={`mb-2 w-full select-none overflow-hidden rounded-[12px] border bg-white shadow-sm transition-opacity ${isDragging ? 'opacity-60 border-blue-300 ring-2 ring-blue-100' : 'border-gray-100'}`}
         >
-            <div className="flex justify-between items-start gap-2 mb-2">
-                <div className="flex items-center gap-1 min-w-0">
-                    {epic ? (
-                        <span className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded uppercase truncate max-w-full">
-                            {epic.title}
-                        </span>
-                    ) : <span></span>}
-                    {task.isRecurring && <Clock size={10} className="text-blue-400" />}
+            <button
+                type="button"
+                onClick={onClick}
+                aria-label={`Открыть задачу «${task.title}»${canMove ? '. Стрелки влево и вправо меняют статус.' : ''}`}
+                onKeyDown={event => {
+                    if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && canMove && !statusPending) {
+                        const targetStatus = event.key === 'ArrowLeft' ? previousStatus : nextStatus;
+                        if (targetStatus) {
+                            event.preventDefault();
+                            onStatusMove(targetStatus);
+                        }
+                    }
+                }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
+                className="w-full touch-none p-2.5 text-left transition-transform active:scale-[0.98]"
+            >
+                <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-1">
+                        {epic ? (
+                            <span className="max-w-full truncate rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gray-600">
+                                {epic.title}
+                            </span>
+                        ) : <span></span>}
+                        {task.isRecurring && <Clock size={10} className="text-blue-400" />}
+                    </div>
+                    <div className={`h-2 w-2 shrink-0 rounded-full ${priorityConfig.iconColor.replace('text', 'bg')}`} />
                 </div>
-                <div className={`w-2 h-2 rounded-full shrink-0 ${priorityConfig.iconColor.replace('text', 'bg')}`} />
-            </div>
-            <div className="font-medium text-[13px] leading-snug text-gray-800 mb-2 line-clamp-3 break-words">{task.title}</div>
-            
-            {task.dueDate && (
-                 <div className={`text-[10px] mb-2 flex items-center gap-1 ${overdue ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
-                    <Calendar size={10} />
-                    {new Date(task.dueDate).toLocaleDateString('ru-RU')}
-                 </div>
-            )}
+                <div className="mb-2 line-clamp-3 break-words text-[13px] font-medium leading-snug text-gray-800">{task.title}</div>
+                {task.dueDate && (
+                    <div className={`mb-2 flex items-center gap-1 text-[10px] ${overdue ? 'font-bold text-red-500' : 'text-gray-400'}`}>
+                        <Calendar size={10} />
+                        {new Date(task.dueDate).toLocaleDateString('ru-RU')}
+                    </div>
+                )}
 
-            <div className="flex items-center justify-between">
-                 {assignee ? <Avatar user={assignee} size="sm" /> : <div />}
-                 <span className="text-[10px] font-bold text-yellow-600 flex items-center gap-0.5">
-                    <Trophy size={10} /> {task.points}
-                 </span>
-            </div>
-        </button>
+                <div className="flex items-center justify-between">
+                    {assignee ? <Avatar user={assignee} size="sm" /> : <div />}
+                    <span className="flex items-center gap-0.5 text-[10px] font-bold text-yellow-600">
+                        <Trophy size={10} /> {task.points}
+                    </span>
+                </div>
+            </button>
+            {canMove ? (
+                <div className="flex items-center justify-between border-t border-black/5 px-1">
+                    <button
+                        type="button"
+                        disabled={!previousStatus || statusPending}
+                        onClick={() => previousStatus && onStatusMove(previousStatus)}
+                        className="grid h-11 w-11 place-items-center rounded-xl text-gray-500 disabled:opacity-25"
+                        aria-label={previousStatus ? `Переместить «${task.title}» в ${TASK_STATUS_META[previousStatus].label}` : `«${task.title}» уже в первой колонке`}
+                    ><ArrowLeft size={18} /></button>
+                    {statusPending ? <Loader2 size={16} className="animate-spin text-blue-500" aria-label="Сохраняю статус" /> : null}
+                    <button
+                        type="button"
+                        disabled={!nextStatus || statusPending}
+                        onClick={() => nextStatus && onStatusMove(nextStatus)}
+                        className="grid h-11 w-11 place-items-center rounded-xl text-gray-500 disabled:opacity-25"
+                        aria-label={nextStatus ? `Переместить «${task.title}» в ${TASK_STATUS_META[nextStatus].label}` : `«${task.title}» уже в последней колонке`}
+                    ><ArrowRight size={18} /></button>
+                </div>
+            ) : null}
+        </div>
     )
 }
 
 // --- Editors ---
 
-export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routinePending = false, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, onRoutineComplete?: (routineId: string, taskId: string) => void, routinePending?: boolean, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
+export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routinePending = false, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void | TaskSaveFlowResult | Promise<void | TaskSaveFlowResult>, onDelete: (id: string) => void, onRoutineComplete?: (routineId: string, taskId: string) => void, routinePending?: boolean, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Priority>(task?.priority || 'MEDIUM');
@@ -266,6 +290,7 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routineP
   const [nextAction, setNextAction] = useState(task?.nextAction || '');
   const [estimateMinutes, setEstimateMinutes] = useState(task?.estimateMinutes ? String(task.estimateMinutes) : '');
   const [dependsOnIds, setDependsOnIds] = useState<string[]>(task?.dependsOnIds || []);
+  const [isSaving, setSaving] = useState(false);
   const isRoutineTask = !!task?.routineTemplateId;
 
   const handleAddSubtask = () => {
@@ -274,9 +299,10 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routineP
     setNewSubtask('');
   };
 
-  const handleSave = () => {
-    if (!title.trim()) return;
-    onSave({
+  const handleSave = async () => {
+    if (!title.trim() || isSaving) return;
+    setSaving(true);
+    const result = await onSave({
       id: task?.id || Math.random().toString(36).substr(2, 9),
       title,
       description,
@@ -301,6 +327,8 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routineP
       estimateMinutes: estimateMinutes ? Number(estimateMinutes) : undefined,
       dependsOnIds
     });
+    if (result && result.kind === 'status-failed') setStatus(result.confirmedStatus);
+    setSaving(false);
   };
 
   const handleBreakdown = async () => {
@@ -379,13 +407,13 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routineP
       </div>
 
       <div className="space-y-3">
-           {!task ? (
+           {!isRoutineTask ? (
                <div>
-                   <label className="mb-1 block text-xs font-bold uppercase text-gray-400">Куда положить</label>
-                   <select value={status} onChange={event => setStatus(event.target.value as TaskStatus)} className="w-full rounded-lg border border-gray-100 bg-gray-50 p-2 text-sm outline-none focus:border-blue-200">
-                       <option value="INBOX">Во входящие — разобрать позже</option>
-                       <option value="TODO">Сразу в список дел</option>
-                       <option value="WAITING">Ожидает ответа или события</option>
+                   <label className="mb-1 block text-xs font-bold uppercase text-gray-400" htmlFor="task-status">{task ? 'Статус' : 'Куда положить'}</label>
+                   <select id="task-status" aria-label="Статус задачи" value={status} onChange={event => setStatus(event.target.value as TaskStatus)} className="w-full rounded-lg border border-gray-100 bg-gray-50 p-2 text-sm outline-none focus:border-blue-200">
+                       {(task ? TASK_STATUSES : NEW_TASK_STATUSES).map(candidate => (
+                           <option key={candidate} value={candidate}>{task ? TASK_STATUS_META[candidate].label : candidate === 'INBOX' ? 'Во входящие — разобрать позже' : candidate === 'TODO' ? 'Сразу в список дел' : 'Ожидает ответа или события'}</option>
+                       ))}
                    </select>
                </div>
            ) : null}
@@ -601,8 +629,8 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routineP
                   {routinePending ? <span className="inline-flex items-center gap-2"><Loader2 size={17} className="animate-spin" /> Выполняю…</span> : 'Выполнить рутину'}
               </button>
           ) : (
-              <button type="button" onClick={handleSave} disabled={isRoutineTask} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform disabled:opacity-40">
-                  Сохранить
+              <button type="button" onClick={() => void handleSave()} disabled={isRoutineTask || isSaving} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform disabled:opacity-40">
+                  {isSaving ? 'Сохраняю…' : 'Сохранить'}
               </button>
           )}
       </div>
@@ -733,11 +761,14 @@ export const TasksScreen = ({
     onStatusChange,
     onRoutineComplete,
     pendingRoutineIds,
+    pendingTaskIds,
     onMoveTask,
     onAddEpic,
     onEditEpic,
     onEpicFilterChange,
-    activeFilterEpicId
+    activeFilterEpicId,
+    ownershipFilter,
+    onOwnershipFilterChange
 }: { 
     data: AppData, 
     onTaskClick: (t: Task) => void,
@@ -745,11 +776,14 @@ export const TasksScreen = ({
     onStatusChange: (id: string, status: TaskStatus) => void,
     onRoutineComplete: (routineId: string, taskId: string) => void,
     pendingRoutineIds?: ReadonlySet<string>,
+    pendingTaskIds?: ReadonlySet<string>,
     onMoveTask: (id: string, status: TaskStatus, beforeTaskId?: string) => void,
     onAddEpic: () => void,
     onEditEpic: (epic: Epic) => void,
     onEpicFilterChange: (epicId?: string) => void,
-    activeFilterEpicId?: string
+    activeFilterEpicId?: string,
+    ownershipFilter: TaskOwnershipFilter,
+    onOwnershipFilterChange: (filter: TaskOwnershipFilter) => void
 }) => {
     const [view, setView] = useState<'LIST' | 'KANBAN'>('KANBAN');
     const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -758,7 +792,10 @@ export const TasksScreen = ({
     
     const visibleEpics = data.epics.filter(e => isVisible(e, data.currentUser));
     const visibleTasks = data.tasks.filter(t => isVisible(t, data.currentUser));
-    let tasks = visibleTasks;
+    const ownershipTasks = ownershipFilter === 'MINE'
+        ? visibleTasks.filter(task => task.assigneeId === data.currentUser.id)
+        : visibleTasks;
+    let tasks = ownershipTasks;
     if (activeFilterEpicId) {
         tasks = tasks.filter(t => t.epicId === activeFilterEpicId);
     }
@@ -831,8 +868,18 @@ export const TasksScreen = ({
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                         <SegmentedControl
+                            value={ownershipFilter}
+                            onChange={onOwnershipFilterChange}
+                            ariaLabel="Исполнитель задач"
+                            options={[
+                                { value: 'ALL', label: 'Все' },
+                                { value: 'MINE', label: 'Мои' }
+                            ]}
+                        />
+                        <SegmentedControl
                             value={view}
                             onChange={setView}
+                            ariaLabel="Вид задач"
                             options={[
                                 { value: 'LIST', icon: ListIcon, ariaLabel: 'Список задач' },
                                 { value: 'KANBAN', icon: Kanban, ariaLabel: 'Канбан' }
@@ -850,12 +897,12 @@ export const TasksScreen = ({
                     >
                         Все
                         <span className={`min-w-5 h-5 px-1.5 rounded-full flex items-center justify-center text-[10px] ${!activeFilterEpicId ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'}`}>
-                            {visibleTasks.length}
+                            {ownershipTasks.length}
                         </span>
                     </button>
                     {visibleEpics.map(epic => {
                         const isActive = activeFilterEpicId === epic.id;
-                        const count = visibleTasks.filter(task => task.epicId === epic.id).length;
+                        const count = ownershipTasks.filter(task => task.epicId === epic.id).length;
                         return (
                             <button
                                 key={epic.id}
@@ -944,6 +991,7 @@ export const TasksScreen = ({
                                             assignee={data.members.find(m => m.id === task.assigneeId)}
                                             epic={data.epics.find(e => e.id === task.epicId)}
                                             isDragging={draggingId === task.id}
+                                            statusPending={pendingTaskIds?.has(task.id)}
                                             onPointerDown={task.routineTemplateId ? undefined : (event) => beginDrag(event, task.id)}
                                             onPointerMove={task.routineTemplateId ? undefined : updateDrag}
                                             onPointerUp={task.routineTemplateId ? undefined : finishDrag}

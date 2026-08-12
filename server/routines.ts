@@ -348,6 +348,14 @@ const streakBonus = (streak: number) => {
     return 0;
 };
 
+const streakBonusesCrossed = (streak: number, units: number) => {
+    let bonus = 0;
+    for (let offset = 1; offset <= units; offset += 1) {
+        bonus += streakBonus(streak + offset);
+    }
+    return bonus;
+};
+
 const creditRoutineXp = (
     data: AppData,
     creditedUserId: string,
@@ -397,8 +405,8 @@ export const completeRoutine = (
         if (template.accumulatedUnits <= 0 || units > template.accumulatedUnits) {
             throw new DomainError('No accumulated units are available', 409);
         }
-        const nextStreak = template.streak + 1;
-        const bonus = streakBonus(nextStreak);
+        const nextStreak = template.streak + units;
+        const bonus = streakBonusesCrossed(template.streak, units);
         const award = baseXp * units + bonus;
         const credited = creditRoutineXp(data, creditedUserId, award, `Рутина: ${template.title} × ${units}`, now, idFactory);
         const remaining = template.accumulatedUnits - units;
@@ -429,7 +437,8 @@ export const completeRoutine = (
                 streak: nextStreak,
                 streakBonus: bonus,
                 onTime: true,
-                timestamp: now
+                timestamp: now,
+                payload: { creditedUserId }
             }]
         };
     }
@@ -478,7 +487,8 @@ export const completeRoutine = (
             streak: nextStreak,
             streakBonus: bonus,
             onTime,
-            timestamp: now
+            timestamp: now,
+            payload: { creditedUserId }
         }, ...(successor ? [{
             id: `routine-event-${idFactory()}`,
             routineId: id,
@@ -581,7 +591,11 @@ export const summarizeRoutines = (data: AppData, now = Date.now()): RoutineSumma
     const score = Math.max(0, 100 - amber * 15 - red * 35);
     const timezone = fallbackTimezone;
     const today = dateInTimezone(now, timezone);
-    const completed = (data.routineEvents || []).filter(event => event.type === 'COMPLETED' && dateInTimezone(event.timestamp, timezone) === today);
+    const completed = (data.routineEvents || []).filter(event => (
+        event.type === 'COMPLETED'
+        && (event.xpAwarded || 0) > 0
+        && dateInTimezone(event.timestamp, timezone) === today
+    ));
     return {
         dueToday: routines.filter(routine => routine.kind === 'SCHEDULED' && routine.nextOccurrenceDate === today).length,
         overdue: routines.filter(routine => routine.kind === 'SCHEDULED' && !!routine.nextOccurrenceDate && routine.nextOccurrenceDate < today).length,

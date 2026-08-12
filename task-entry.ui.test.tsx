@@ -72,6 +72,8 @@ const TaskEditorProbe = ({ source }: { source: 'dashboard' | 'tasks' }) => {
             onAddEpic={() => undefined}
             onEditEpic={() => undefined}
             onEpicFilterChange={() => undefined}
+            ownershipFilter="ALL"
+            onOwnershipFilterChange={() => undefined}
         />}
         {open ? <div role="dialog" aria-label="Редактор новой задачи">Редактор задачи открыт</div> : null}
     </>;
@@ -138,6 +140,8 @@ describe('legacy routine completion entry points', () => {
             onAddEpic={() => undefined}
             onEditEpic={() => undefined}
             onEpicFilterChange={() => undefined}
+            ownershipFilter="ALL"
+            onOwnershipFilterChange={() => undefined}
         />);
 
         fireEvent.click(screen.getByRole('button', { name: 'Список задач' }));

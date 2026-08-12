@@ -199,14 +199,14 @@ export const DashboardScreen = ({
     return (
         <Screen className="animate-in fade-in duration-300">
             {/* Header */}
-            <div className="flex items-center justify-between">
-                 <div>
-                    <h1 className="text-[24px] leading-tight font-bold text-gray-950 flex items-center gap-2">
-                        Привет, {data.currentUser.name}! 
+            <div className="flex items-start justify-between gap-3">
+                 <div className="min-w-0 flex-1">
+                    <h1 className="flex flex-wrap items-center gap-2 break-words text-[24px] font-bold leading-tight text-gray-950">
+                        <span className="min-w-0 break-words">Привет, {data.currentUser.name}!</span>
                         {streak > 0 && (
-                             <div className="flex items-center gap-0.5 bg-orange-50 text-orange-600 px-2 py-1 rounded-full text-xs font-bold border border-orange-100">
+                             <span className="flex shrink-0 items-center gap-0.5 rounded-full border border-orange-100 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-600">
                                  <Flame size={12} fill="currentColor" /> {streak}
-                             </div>
+                             </span>
                         )}
                     </h1>
                     <p className="text-gray-500 text-[13px]">Вот что у нас происходит</p>

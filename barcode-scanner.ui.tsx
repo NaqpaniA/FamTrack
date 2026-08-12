@@ -1,16 +1,36 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Camera, ImagePlus, Keyboard, Loader2, ScanLine, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Camera, ImagePlus, Keyboard, Loader2, ScanLine } from 'lucide-react';
 import { normalizeBarcode } from './barcode';
 import { scanBarcodeFile, startBarcodeCamera } from './barcode-scanner';
+import { TWA } from './utils';
 
 export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: string) => void; onClose: () => void }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const handledRef = useRef(false);
+    const closedRef = useRef(false);
+    const cameraCleanupRef = useRef<(() => void) | undefined>();
+    const cameraStoppedRef = useRef(false);
     const onDetectedRef = useRef(onDetected);
+    const onCloseRef = useRef(onClose);
     onDetectedRef.current = onDetected;
+    onCloseRef.current = onClose;
     const [error, setError] = useState('');
     const [manual, setManual] = useState('');
     const [starting, setStarting] = useState(true);
+
+    const stopCameraOnce = useCallback(() => {
+        if (cameraStoppedRef.current || !cameraCleanupRef.current) return;
+        cameraStoppedRef.current = true;
+        cameraCleanupRef.current();
+    }, []);
+
+    const closeScanner = useCallback(() => {
+        if (closedRef.current) return;
+        closedRef.current = true;
+        handledRef.current = true;
+        stopCameraOnce();
+        onCloseRef.current();
+    }, [stopCameraOnce]);
 
     useEffect(() => {
         let cleanup: (() => void) | undefined;
@@ -18,14 +38,21 @@ export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: 
         const video = videoRef.current;
         if (!video) return;
         startBarcodeCamera(video, barcode => {
-            if (handledRef.current) return;
+            if (!mounted || closedRef.current || handledRef.current) return;
             handledRef.current = true;
+            stopCameraOnce();
             onDetectedRef.current(barcode);
         }, cameraError => {
             if (mounted) setError(cameraError.message);
         }).then(stop => {
-            if (!mounted) stop();
-            else cleanup = stop;
+            let stopped = false;
+            cleanup = () => {
+                if (stopped) return;
+                stopped = true;
+                stop();
+            };
+            cameraCleanupRef.current = cleanup;
+            if (!mounted || closedRef.current) stopCameraOnce();
         }).catch(cameraError => {
             if (mounted) setError(cameraError instanceof Error ? cameraError.message : 'Камера недоступна');
         }).finally(() => {
@@ -33,17 +60,39 @@ export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: 
         });
         return () => {
             mounted = false;
-            cleanup?.();
+            closedRef.current = true;
+            handledRef.current = true;
+            if (cleanup && !cameraCleanupRef.current) cameraCleanupRef.current = cleanup;
+            stopCameraOnce();
         };
-    }, []);
+    }, [stopCameraOnce]);
+
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            closeScanner();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        TWA.backButton.onClick(closeScanner);
+        TWA.backButton.show();
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            TWA.backButton.offClick(closeScanner);
+            TWA.backButton.hide();
+        };
+    }, [closeScanner]);
 
     const submitManual = () => {
+        if (closedRef.current || handledRef.current) return;
         const barcode = normalizeBarcode(manual);
         if (!barcode) {
             setError('Проверьте длину и контрольную цифру EAN/UPC.');
             return;
         }
-        onDetected(barcode);
+        handledRef.current = true;
+        stopCameraOnce();
+        onDetectedRef.current(barcode);
     };
 
     const scanFile = async (file?: File) => {
@@ -52,7 +101,10 @@ export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: 
         try {
             const barcode = await scanBarcodeFile(file);
             if (!barcode) throw new Error('Штрихкод на изображении не найден');
-            onDetected(barcode);
+            if (closedRef.current || handledRef.current) return;
+            handledRef.current = true;
+            stopCameraOnce();
+            onDetectedRef.current(barcode);
         } catch (fileError) {
             setError(fileError instanceof Error ? fileError.message : 'Не удалось прочитать изображение');
         }
@@ -67,9 +119,9 @@ export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: 
                 paddingBottom: 'var(--app-safe-bottom)'
             }}
         >
-            <div className="flex items-center justify-between p-4">
-                <div className="flex items-center gap-2 font-black"><ScanLine size={20} /> Штрихкод</div>
-                <button type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full bg-white/10" aria-label="Закрыть сканер"><X size={20} /></button>
+            <div className="flex items-center justify-between gap-3 p-4">
+                <button type="button" onClick={closeScanner} className="inline-flex min-h-11 min-w-11 items-center gap-2 rounded-xl bg-white/10 px-3 text-sm font-black text-white" aria-label="К запасам"><ArrowLeft size={19} /> К запасам</button>
+                <div className="flex min-w-0 items-center gap-2 truncate font-black"><ScanLine size={20} className="shrink-0" /> Штрихкод</div>
             </div>
             <div className="relative mx-4 min-h-0 flex-1 overflow-hidden rounded-[24px] bg-gray-900">
                 <video ref={videoRef} muted className="h-full w-full object-cover" aria-label="Предпросмотр камеры" />
@@ -90,6 +142,7 @@ export const BarcodeScanner = ({ onDetected, onClose }: { onDetected: (barcode: 
                     </div>
                 </div>
                 <p className="flex items-center justify-center gap-2 text-center text-[11px] text-white/50"><Camera size={13} /> Видео обрабатывается только на устройстве и не отправляется на сервер.</p>
+                <button type="button" onClick={closeScanner} className="min-h-11 w-full rounded-2xl bg-white px-4 text-sm font-black text-black">Закрыть сканер</button>
             </div>
         </div>
     );

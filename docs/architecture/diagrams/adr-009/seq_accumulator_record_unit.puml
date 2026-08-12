@@ -1,0 +1,47 @@
+@startuml
+!pragma teoz true
+!include ../_style_product_seq.puml
+
+autonumber
+title
+FamTrack — POST /api/routines/record-unit
+<size:12>A physical unit is accumulated without completing work or awarding XP</size>
+end title
+footer Contract: one receipt + one UNIT_RECORDED; members and reward logs are unchanged
+
+actor "Family member" as actor
+boundary "Household UI" as ui
+boundary "HTTP API" as api
+control "Routine domain" as routine
+database "SQLite aggregate + receipts" as db
+
+activate actor
+actor -> ui : add N physical units (normally +1)
+activate ui
+ui -> api : POST /api/routines/record-unit\n{revision, mutationId, routineId, units:N}
+activate api
+api -> db : lookup receipt + read fresh aggregate
+activate db
+db --> api : exact duplicate | current state
+deactivate db
+
+alt exact duplicate mutationId
+  api --> ui : authoritative accumulatedUnits\nduplicate=true; no second event
+else new command
+  api -> routine : validate visibility, accumulator kind and pause\nclamp N to 1..1000
+  activate routine
+  routine -> routine : accumulatedUnits += N\nopenTask.routineUnits = accumulatedUnits
+  routine --> api : one UNIT_RECORDED {units:N}\nno xpAwarded; no member/reward change
+  deactivate routine
+  api -> db : atomic template/task/event/receipt/revision
+  activate db
+  db --> api : committed authoritative state
+  deactivate db
+  api --> ui : accumulatedUnits; duplicate=false; rebased flag
+end
+
+deactivate api
+ui --> actor : +N накоплено
+deactivate ui
+deactivate actor
+@enduml

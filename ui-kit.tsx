@@ -39,14 +39,16 @@ export const SegmentedControl = <T extends string>({
   value,
   options,
   onChange,
-  className = ''
+  className = '',
+  ariaLabel
 }: {
   value: T,
   options: Array<{ value: T, label?: string, icon?: IconComponent, ariaLabel?: string }>,
   onChange: (value: T) => void,
-  className?: string
+  className?: string,
+  ariaLabel?: string
 }) => (
-  <div role="group" className={`inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200/70 ${className}`}>
+  <div role="group" aria-label={ariaLabel} className={`inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200/70 ${className}`}>
     {options.map(option => {
       const Icon = option.icon;
       const active = option.value === value;
@@ -201,7 +203,7 @@ const AvatarImage = ({ user }: { key?: React.Key, user?: User }) => {
 export const Avatar = ({ user, size = 'sm', selected = false, onClick }: { key?: React.Key, user?: User, size?: 'sm' | 'md' | 'lg' | 'xl', selected?: boolean, onClick?: () => void }) => {
   const sizes = { sm: 'w-7 h-7 text-xs', md: 'w-9 h-9 text-base', lg: 'w-12 h-12 text-xl', xl: 'w-16 h-16 text-3xl' };
   const directAvatarUrl = user?.avatarUrl?.startsWith('https://') ? user.avatarUrl : '';
-  const className = `${sizes[size]} rounded-full overflow-hidden flex items-center justify-center bg-gray-100 border transition-all ${onClick ? 'cursor-pointer' : ''} ${selected ? 'border-blue-500 ring-2 ring-blue-100 scale-105' : 'border-white'}`;
+  const className = `${sizes[size]} shrink-0 rounded-full overflow-hidden flex items-center justify-center bg-gray-100 border transition-all ${onClick ? 'cursor-pointer' : ''} ${selected ? 'border-blue-500 ring-2 ring-blue-100 scale-105' : 'border-white'}`;
   const content = <AvatarImage key={`${user?.id || 'unknown'}:${directAvatarUrl}`} user={user} />;
   return onClick ? (
     <button type="button" onClick={onClick} className={className} aria-label={user ? `Выбрать ${user.name}` : 'Выбрать участника'} aria-pressed={selected}>

@@ -27,7 +27,8 @@ export const canSee = (
     return item.visibleTo.includes(actor.id);
 };
 
-export const filterForActor = (data: AppData, actor: User): AppData => {
+export const filterForActor = (data: AppData, actorOverride: User): AppData => {
+    const actor = data.members.find(member => member.id === actorOverride.id) || actorOverride;
     const activeMembers = data.members.filter(member => member.isActive !== false);
     const archivedMembers = data.members.filter(member => member.isActive === false);
     const visibleRoutines = (data.routines || []).filter(routine => (

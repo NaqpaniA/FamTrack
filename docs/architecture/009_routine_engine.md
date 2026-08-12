@@ -1,8 +1,10 @@
 # ADR 009: Routine engine, Household Pulse and spoiler-safe wishes
 
-**Статус:** ПРИНЯТО; production activation gated
+**Статус:** ПРИНЯТО; production hotfix активирован 2026-08-12
 
 **Дата:** 2026-08-11
+
+**Изменено:** 2026-08-12 — production hotfix accumulator/XP projection
 
 **Владение:** routines domain, tasks, XP ledger, Household Pulse, wishlists
 **Связанные решения:** ADR 007 (commands/XP), ADR 008 (durable outbox)
@@ -14,8 +16,9 @@
 
 - `SCHEDULED`: ежедневно, выбранные дни недели, раз в N дней/недель, день
   месяца или ежегодно;
-- `ACCUMULATOR`: накапливаемые единицы с `+1` и completion выбранного batch от
-  `1` до текущего `accumulatedUnits`.
+- `ACCUMULATOR`: физически накапливаемые единицы (например, мусор или грязная
+  посуда). `+1` только увеличивает `accumulatedUnits`; XP начисляется позднее,
+  при completion выбранного batch от `1` до текущего `accumulatedUnits`.
 
 Template задаёт fixed/round-robin/free assignment, personal/family visibility,
 start/end date, optional local time, IANA timezone семьи, difficulty, priority,
@@ -34,6 +37,17 @@ pause и streak. Неактивный участник исключается и
 действия другой рутины остаются доступны. Это UI-защита поверх обязательной
 серверной идемпотентности `mutationId`.
 
+`POST /api/routines/record-unit` сохраняет накопление в template/open task и
+пишет один `UNIT_RECORDED` без `xpAwarded`, reward-log и изменения участника.
+Клиент отвечает точным состоянием «+N накоплено». Накопленные ранее единицы
+не отличаются от новых и разбираются тем же batch-действием; специальной
+миграции или отдельного legacy redemption нет.
+
+`POST /api/routines/complete` для accumulator атомарно списывает выбранные N
+единиц, начисляет XP назначенному исполнителю (fixed/round-robin) либо
+нажавшему участнику (free), пишет один `COMPLETED` и один reward-log. Ответ UI
+показывает `+N XP → имя исполнителя` по подтверждённым данным сервера.
+
 Skip всегда требует подтверждения с текстом об отсутствии XP. Он переводит
 текущую task в `DROPPED`, сбрасывает streak, пишет `SKIPPED`, начисляет ноль XP
 и создаёт максимум одного successor. Pause оставляет тот же экземпляр и меняет
@@ -47,12 +61,22 @@ events являются источником истории и summary.
 ## 3. XP, расписание и timezone
 
 Основной XP определяется серверной матрицей difficulty × priority из ADR 007.
-Scheduled occurrence или accumulator unit награждается один раз.
+Scheduled occurrence или погашенная accumulator unit награждается один раз.
 
 - on-time completion продолжает streak;
 - late completion сохраняет основной XP, но сбрасывает streak;
 - milestone `3` добавляет `10 XP`, `7` — `25 XP`, каждый `30-й` — `100 XP`;
+- accumulator batch из N единиц увеличивает streak на N и начисляет
+  `baseXp × N + Σ milestoneBonus` для всех рубежей, пересечённых этими N
+  единицами;
 - retry, reopen и duplicate mutation не удваивают XP.
+
+После mutation `currentUser` повторно разрешается по `id` из свежего массива
+`members`; actor-specific RBAC projection строится на том же свежем участнике.
+Поэтому mutation response и следующий условный GET с `304` не удерживают
+старое значение XP. Результат routine-команды логируется структурированно:
+только `operation`, `mutationId`, `duplicate`, `rebased`, `units` и
+`xpAwarded`, без названий рутин и пользовательского текста.
 
 Календарная дата определяется через timezone template. Monthly day clamp-ится
 к последнему дню короткого месяца. `endDate` закрывает routine после последнего
@@ -76,6 +100,9 @@ Scheduled occurrence или accumulator unit награждается один �
 `routineSummary` временно сохраняется как совместимая объединённая projection.
 Day Pulse и House Health читают выбранный scope. Расходы в `PERSONAL` считают
 только операции текущего пользователя, в `FAMILY` — все доступные семейные.
+`completedToday` и `xpToday` считают только `COMPLETED` с положительным
+`xpAwarded`; `UNIT_RECORDED` и старые события без XP остаются историей
+накопления, но не выполнением.
 
 ## 5. Wishes и privacy
 
@@ -94,6 +121,7 @@ HTTPS URL и priority. Участник может добавлять в сем�
 |---|---|---|---|---|
 | Create/update routine | `POST /api/routines/save` | `routine_templates`, open `tasks`, `routine_events` | `mutationId` receipt | 400/403/422 |
 | Pause/resume | `POST /api/routines/pause` | template + open task + event | `mutationId` receipt | 403/404 |
+| Record accumulated units | `POST /api/routines/record-unit` | template + open task + `UNIT_RECORDED` | `mutationId` receipt | 403/404/409 |
 | Complete/batch | `POST /api/routines/complete` | task/template/event + XP/reward log | receipt + occurrence/reward fields | 403/404/409 |
 | Skip | `POST /api/routines/skip` | task/template/event | `mutationId` receipt | 403/404/409 |
 | Reserve/release wish | `POST /api/wishlists/items/{reserve\|release}` | wishlist JSON row | `mutationId` receipt | 403/404/409 |
@@ -111,11 +139,14 @@ HTTPS URL и priority. Участник может добавлять в сем�
 | `PANTRY` | `false` | вне Release 2 |
 | `RECEIPT_OCR` | `false` | вне Release 2 |
 
-Activation запрещена до 24 часов стабильного hotfix-наблюдения, Android
-360–430 px/safe-area/keyboard gate и candidate restore drill. Первый smoke
-после включения: одна существующая routine → одно событие completion, один XP
-award и ровно один новый open occurrence. После новых production writes rollback
-меняет только image/flag и сохраняет актуальную БД; старый snapshot запрещён.
+Hotfix активирован после Android 360/430 px safe-area gate, полного quality
+gate, candidate restore drill и privacy-safe DB compare. Flags `ROUTINES`,
+`PANTRY` и `RECEIPT_OCR` при переключении не менялись. Production smoke
+accumulator подтвердил: `+1` создаёт только `UNIT_RECORDED`, completion единицы
+создаёт один reward-log/`COMPLETED`, exact replay не начисляет XP повторно.
+После новых production writes rollback меняет только image/flag и сохраняет
+актуальную БД; старый snapshot запрещён. Продолжается обычное post-release
+наблюдение метрик и логов.
 
 ## 8. Риски, rejected и deferred
 
@@ -138,6 +169,10 @@ snapshot после появления новых записей.
 - all schedule kinds и timezone edge cases покрыты server tests;
 - pause/skip/end date не создают backlog;
 - round-robin пропускает inactive member;
+- accumulator `+1` сохраняет объём без XP, batch N уменьшает объём и двигает streak на N;
+- accumulator batch суммирует все пересечённые streak bonuses и создаёт один reward-log;
+- duplicate batch не создаёт второй event/reward-log и не начисляет XP повторно;
+- `currentUser.xp === members[currentUser.id].xp` в mutation response и после `304`;
 - `PERSONAL` и `FAMILY` summaries не смешиваются;
 - owner wish projection не содержит reservation fields;
 - initial `SAVED` отсутствует, success pill удаляется через 1.5 s, CHECK остаётся;
@@ -149,5 +184,6 @@ snapshot после появления новых записей.
 - [Pause/resume — PUML](diagrams/adr-009/seq_routine_pause.puml) / [SVG](diagrams/adr-009/seq_routine_pause.svg)
 - [Skip without XP — PUML](diagrams/adr-009/seq_routine_skip.puml) / [SVG](diagrams/adr-009/seq_routine_skip.svg)
 - [Scheduled completion + XP — PUML](diagrams/adr-009/seq_routine_completion_xp.puml) / [SVG](diagrams/adr-009/seq_routine_completion_xp.svg)
-- [Accumulator batch — PUML](diagrams/adr-009/seq_accumulator_batch.puml) / [SVG](diagrams/adr-009/seq_accumulator_batch.svg)
+- [Accumulator record unit — PUML](diagrams/adr-009/seq_accumulator_record_unit.puml) / [SVG](diagrams/adr-009/seq_accumulator_record_unit.svg)
+- [Accumulator batch payout — PUML](diagrams/adr-009/seq_accumulator_batch.puml) / [SVG](diagrams/adr-009/seq_accumulator_batch.svg)
 - [Wishlist reservation — PUML](diagrams/adr-009/seq_wishlist_reservation.puml) / [SVG](diagrams/adr-009/seq_wishlist_reservation.svg)

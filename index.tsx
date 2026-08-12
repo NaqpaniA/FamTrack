@@ -16,7 +16,7 @@ import { KEYS } from './queries';
 // UI Modules
 import { DashboardScreen } from './dashboard.ui';
 import { FamilyScreen } from './family.ui';
-import { TasksScreen, TaskEditor, EpicEditor } from './tasks.ui';
+import { TasksScreen, TaskEditor, EpicEditor, type TaskOwnershipFilter } from './tasks.ui';
 import { FinanceScreen, TransactionEditor, AccountEditor, BudgetEditor } from './finance.ui';
 import { ShoppingScreen } from './shopping.ui';
 import { SettingsModal } from './settings.ui';
@@ -40,9 +40,12 @@ const useTelegramShell = () => {
       TWA.ready();
       TWA.expand();
       TWA.disableVerticalSwipes();
-      TWA.requestFullscreen();
+      const cleanupFullscreenSync = TWA.requestFullscreen();
       TWA.enableClosingConfirmation();
-      return cleanup;
+      return () => {
+          cleanupFullscreenSync?.();
+          cleanup();
+      };
   }, []);
 };
 
@@ -186,6 +189,7 @@ const FamTrackApp = () => {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   
   const [activeEpicFilter, setActiveEpicFilter] = useState<string | undefined>(undefined);
+  const [taskOwnershipFilter, setTaskOwnershipFilter] = useState<TaskOwnershipFilter>('ALL');
   const [initialEpicData, setInitialEpicData] = useState<Partial<Epic> | undefined>(undefined);
 
   // --- Daily Streak Check ---
@@ -219,10 +223,13 @@ const FamTrackApp = () => {
       TWA.selection();
   };
 
-  const handleTaskSave = (task: Task) => {
-      actions.tasks.save(task);
-      setTaskModalOpen(false);
-      setEditingTask(null);
+  const handleTaskSave = async (task: Task) => {
+      const result = await actions.tasks.save(task);
+      if (result.kind === 'saved') {
+          setTaskModalOpen(false);
+          setEditingTask(null);
+      }
+      return result;
   };
 
   const handleTaskDelete = (id: string) => {
@@ -366,6 +373,7 @@ const FamTrackApp = () => {
 	                onStatusChange={actions.tasks.toggleStatus}
 	                onRoutineComplete={actions.routines.complete}
 	                pendingRoutineIds={actions.routines.pendingIds}
+	                pendingTaskIds={actions.tasks.pendingIds}
 	                onMoveTask={actions.tasks.move}
 	                onAddEpic={() => openEpicModal()}
 	                onEditEpic={(epic) => openEpicModal(epic)}
@@ -374,6 +382,8 @@ const FamTrackApp = () => {
 	                    TWA.selection();
 	                }}
 	                activeFilterEpicId={activeEpicFilter}
+	                ownershipFilter={taskOwnershipFilter}
+	                onOwnershipFilterChange={setTaskOwnershipFilter}
 	              />
           )}
           {activeTab === 'SHOP' && (

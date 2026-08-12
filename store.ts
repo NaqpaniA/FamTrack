@@ -11,6 +11,9 @@ import { useFamilyData, useMutations } from './queries';
 import type { RoutineTemplate } from './routines.model';
 import type { Wishlist, WishlistItem } from './wishlist.model';
 import { useRoutineActionGuard } from './routine-action-guard';
+import { useTaskActionGuard } from './task-action-guard';
+import { saveTaskFieldsThenStatus } from './task-save-flow';
+import { routineCompletionFeedback, routineUnitRecordedFeedback } from './routine-feedback';
 
 const EMPTY_DATA: AppData = {
   currentUser: {
@@ -48,6 +51,7 @@ export const useAppStore = () => {
   const isError = !familyQuery.data && familyQuery.isError;
   const mutations = useMutations();
   const routineActions = useRoutineActionGuard();
+  const taskActions = useTaskActionGuard();
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [bonusData, setBonusData] = useState<{ streak: number, xp: number } | null>(null);
@@ -94,12 +98,21 @@ export const useAppStore = () => {
       }
   };
 
-  const saveTask = (task: Task) => {
-      mutations.saveTask.mutate(task, {
-          onSuccess: () => addToast('Задача сохранена', 'SUCCESS'),
-          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось сохранить задачу', 'ERROR')
+  const saveTask = async (task: Task) => {
+      const previous = data.tasks.find(candidate => candidate.id === task.id);
+      const result = await saveTaskFieldsThenStatus(task, previous, {
+          saveFields: candidate => mutations.saveTask.mutateAsync(candidate),
+          saveStatus: (id, status) => mutations.setTaskStatus.mutateAsync({ id, status })
       });
-      TWA.haptic('light');
+      if (result.kind === 'saved') {
+          addToast('Задача сохранена', 'SUCCESS');
+          TWA.haptic('light');
+      } else if (result.kind === 'status-failed') {
+          addToast('Поля сохранены, статус не изменён', 'ERROR');
+      } else {
+          addToast(result.error instanceof Error ? result.error.message : 'Не удалось сохранить задачу', 'ERROR');
+      }
+      return result;
   };
 
   const deleteTask = (id: string) => {
@@ -110,32 +123,42 @@ export const useAppStore = () => {
       TWA.haptic('medium');
   };
 
-  const toggleTaskStatus = (id: string, status: TaskStatus) => {
+  const toggleTaskStatus = async (id: string, status: TaskStatus) => {
       const task = data.tasks.find(t => t.id === id);
       if (!task) return;
       const isCompleting = status === 'DONE' && task.status !== 'DONE';
       const willAwardXp = isCompleting && !task.rewardedAt;
-      mutations.setTaskStatus.mutate({ id, status }, {
-          onSuccess: () => addToast(
+      try {
+          const result = await taskActions.run(id, () => mutations.setTaskStatus.mutateAsync({ id, status }));
+          if (!result) return false;
+          addToast(
               willAwardXp
                 ? `Задача выполнена · +${task.points} XP исполнителю`
                 : isCompleting ? 'Задача снова завершена · XP уже начислялись' : 'Статус задачи обновлён',
               'SUCCESS'
-          ),
-          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось изменить статус', 'ERROR')
-      });
-      TWA.selection();
+          );
+          TWA.selection();
+          return true;
+      } catch (error) {
+          addToast(error instanceof Error ? error.message : 'Не удалось изменить статус', 'ERROR');
+          return false;
+      }
   };
 
-  const moveTask = (id: string, status: TaskStatus, beforeTaskId?: string) => {
+  const moveTask = async (id: string, status: TaskStatus, beforeTaskId?: string) => {
       const task = data.tasks.find(t => t.id === id);
       if (!task) return;
 
-      mutations.setTaskStatus.mutate({ id, status, beforeTaskId }, {
-          onSuccess: () => addToast(status === 'DONE' ? 'Задача завершена' : 'Положение задачи сохранено', 'SUCCESS'),
-          onError: (error) => addToast(error instanceof Error ? error.message : 'Не удалось переместить задачу', 'ERROR')
-      });
-      TWA.selection();
+      try {
+          const result = await taskActions.run(id, () => mutations.setTaskStatus.mutateAsync({ id, status, beforeTaskId }));
+          if (!result) return false;
+          addToast(status === 'DONE' ? 'Задача завершена' : 'Положение задачи сохранено', 'SUCCESS');
+          TWA.selection();
+          return true;
+      } catch (error) {
+          addToast(error instanceof Error ? error.message : 'Не удалось переместить задачу', 'ERROR');
+          return false;
+      }
   };
 
   const saveTransaction = (txData: any) => {
@@ -400,7 +423,7 @@ export const useAppStore = () => {
       try {
           const result = await routineActions.run(routineId, () => mutations.completeRoutine.mutateAsync({ routineId, taskId, units }));
           if (!result) return false;
-          addToast('Выполнение учтено · XP начислен', 'SUCCESS');
+          addToast(routineCompletionFeedback(result, routineId), 'SUCCESS');
           TWA.notification('success');
           return true;
       } catch (error) {
@@ -413,7 +436,7 @@ export const useAppStore = () => {
       try {
           const result = await routineActions.run(routineId, () => mutations.recordRoutineUnit.mutateAsync({ routineId, units }));
           if (!result) return false;
-          addToast(`+${units} учтено`, 'INFO');
+          addToast(routineUnitRecordedFeedback(units), 'INFO');
           TWA.selection();
           return true;
       } catch (error) {
@@ -500,7 +523,7 @@ export const useAppStore = () => {
     removeToast,
     actions: {
       app: { switchUser, checkDailyStreak },
-      tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus, move: moveTask },
+      tasks: { save: saveTask, delete: deleteTask, toggleStatus: toggleTaskStatus, move: moveTask, pendingIds: taskActions.pendingTaskIds },
       finance: { saveTransaction, saveAccount, saveBudgets, saveSavingsGoal, contributeToGoal, saveSubscription, deleteSubscription, paySubscription },
       epics: { save: saveEpic, delete: deleteEpic },
       notes: { save: saveNote, delete: deleteNote },

@@ -3,8 +3,11 @@
 !include ../_style_product_seq.puml
 
 autonumber
-title FamTrack — accumulator record and bounded batch completion
-footer Contract: accumulated/rewarded units prevent double XP
+title
+FamTrack — POST /api/routines/complete (accumulator batch)
+<size:12>One bounded batch atomically consumes physical units and awards XP</size>
+end title
+footer Contract: streak grows by N; all crossed milestones are summed; receipt prevents replay XP
 
 actor "Family member" as actor
 boundary "Household UI" as ui
@@ -13,36 +16,33 @@ control "Routine domain" as routine
 database "SQLite aggregate + receipts" as db
 
 activate actor
-actor -> ui : +1 accumulated unit
-activate ui
-ui -> api : POST /api/routines/record-unit\n{revision, mutationId, routineId, units}
-activate api
-api -> routine : validate accumulator, pause and visibility
-activate routine
-routine --> api : accumulatedUnits += bounded units\nUNIT_RECORDED event
-deactivate routine
-api -> db : commit template/task/event/receipt
-activate db
-db --> api : new revision
-deactivate db
-api --> ui : authoritative accumulated count
-deactivate api
-
 actor -> ui : complete batch of N units
+activate ui
 ui -> api : POST /api/routines/complete\n{revision, mutationId, routineId, units:N}
 activate api
-api -> routine : clamp 1..accumulatedUnits; select active assignee
-activate routine
-routine -> routine : award base XP × N once\n+ one streak milestone bonus
-routine --> api : remaining units + rewardedUnits + COMPLETED event
-deactivate routine
-api -> db : atomic member/reward/task/template/event/receipt
+api -> db : lookup receipt + read fresh aggregate
 activate db
-db --> api : committed state
+db --> api : exact duplicate | current state
 deactivate db
-api --> ui : remaining units + XP
+
+alt exact duplicate mutationId
+  api --> ui : authoritative state\nduplicate=true; no additional XP
+else new command
+  api -> routine : validate visibility/open task; clamp N\nselect fixed/round-robin assignee or free actor
+  activate routine
+  routine -> routine : nextStreak = streak + N\naward = baseXp × N + Σ bonus(streak+1..nextStreak)
+  routine --> api : remaining units + rewardedUnits\nmember XP + one reward-log + one COMPLETED event
+  deactivate routine
+  api -> db : atomic task/member/reward/template/event/receipt/revision
+  activate db
+  db --> api : committed aggregate with fresh members
+  deactivate db
+  api -> api : resolve currentUser from fresh members\nbuild RBAC projection with fresh actor
+  api --> ui : state + units/xp/creditedUserId\nduplicate=false; rebased flag
+end
+
 deactivate api
-ui --> actor : batch accounted
+ui --> actor : +XP → confirmed assignee
 deactivate ui
 deactivate actor
 @enduml

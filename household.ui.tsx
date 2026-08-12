@@ -34,6 +34,7 @@ import { Modal, Panel, SectionHeader } from './ui-kit';
 import { formatMoney } from './utils';
 import { ROUTINE_PRESETS } from './routine-presets';
 import { blankRoutineDraft, RoutineEditor, routineDraftFromPreset, type RoutineDraft } from './routines.ui';
+import { calculateTaskXp } from './tasks.model';
 
 const WIDGET_LABELS: Record<DashboardWidgetId, string> = {
     routines: 'Рутины сегодня',
@@ -248,7 +249,7 @@ const RoutinesWidget = ({ data, actions }: { data: AppData; actions: HouseholdAc
                                 <button type="button" disabled={pending} onClick={() => setEditorDraft({ ...routine })} className="min-w-0 flex-1 rounded-lg text-left disabled:opacity-60" aria-label={`Редактировать рутину ${routine.title}`}>
                                     <span className="flex items-center gap-1.5"><span className="truncate text-sm font-bold">{routine.title}</span><Pencil size={11} className="shrink-0 text-gray-300" /></span>
                                     <span className="mt-0.5 block text-[11px] text-gray-500">
-                                        {routine.paused ? 'На паузе' : routine.kind === 'ACCUMULATOR' ? `${routine.accumulatedUnits} ${routine.unitLabel || 'ед.'} · серия ${routine.streak}` : `${routine.nextOccurrenceDate || 'Без следующей даты'} · серия ${routine.streak}`}
+                                        {routine.paused ? 'На паузе' : routine.kind === 'ACCUMULATOR' ? `${routine.accumulatedUnits} ${routine.unitLabel || 'ед.'} · ${calculateTaskXp(routine.difficulty, routine.priority)} XP/ед. · серия ${routine.streak}` : `${routine.nextOccurrenceDate || 'Без следующей даты'} · серия ${routine.streak}`}
                                     </span>
                                 </button>
                                 <div className="flex shrink-0 items-center gap-0.5">
@@ -380,7 +381,7 @@ const RoutineHistoryWidget = ({ data }: { data: AppData }) => {
                     const routine = data.routines?.find(item => item.id === event.routineId);
                     const actor = data.members.find(member => member.id === event.actorId);
                     const detail = event.type === 'COMPLETED'
-                        ? `Выполнено${event.xpAwarded ? ` · +${event.xpAwarded} XP` : ''}`
+                        ? `Выполнено +${event.units || 1}${event.xpAwarded ? ` · +${event.xpAwarded} XP` : ''}`
                         : event.type === 'SKIPPED'
                             ? 'Пропущено'
                             : `Накоплено +${event.units || 1}`;

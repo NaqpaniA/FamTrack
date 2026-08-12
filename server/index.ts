@@ -17,6 +17,7 @@ import {
     type FeatureCapabilities
 } from './features.js';
 import { completeRoutine, pauseRoutine, recordRoutineUnit, saveRoutine, skipRoutine } from './routines.js';
+import { buildRoutineCommandLog } from './routine-command-log.js';
 import { deleteWishlistItem, saveWishlist, saveWishlistItem, setWishlistReservation } from './wishlists.js';
 import { updateDashboardPreferences } from './preferences.js';
 import { adjustPantry } from './pantry.js';
@@ -614,12 +615,34 @@ function sendCommand(
     delete requestPayload.revision;
     delete requestPayload.mutationId;
     const requestHash = createHash('sha256').update(canonicalJson(requestPayload)).digest('hex');
+    const isRoutineCommand = pathname.startsWith('/api/routines/');
+    let routineEvent: AppData['routineEvents'][number] | undefined;
+    const trackedMutator = isRoutineCommand
+        ? (data: AppData) => {
+            const knownEventIds = new Set((data.routineEvents || []).map(event => event.id));
+            const next = mutator(data);
+            const addedEvents = (next.routineEvents || []).filter(event => !knownEventIds.has(event.id));
+            routineEvent = addedEvents.find(event => event.type === 'COMPLETED' || event.type === 'UNIT_RECORDED')
+                || addedEvents.at(-1);
+            return next;
+        }
+        : mutator;
     const envelope = db.mutateCommand(context.familyId, revision, {
         mutationId,
         actorId: context.actor.id,
         operation: pathname,
         requestHash
-    }, mutator, context.actor);
+    }, trackedMutator, context.actor);
+    if (isRoutineCommand) {
+        console.info(JSON.stringify(buildRoutineCommandLog({
+            operation: pathname,
+            mutationId,
+            duplicate: envelope.command.duplicate,
+            rebased: envelope.command.rebased,
+            requestedUnits: body.units,
+            event: routineEvent
+        })));
+    }
     res.setHeader('ETag', familyRevisionEtag(context.familyId, envelope.revision));
     sendJson(res, 200, {
         revision: envelope.revision,

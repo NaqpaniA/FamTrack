@@ -413,7 +413,8 @@ export class FamTrackDatabase {
         const family = this.getFamily(familyId);
         const members = this.selectRows('SELECT * FROM users WHERE family_id = ? ORDER BY rowid', [familyId]).map(rowToUser);
         const activeMembers = members.filter(user => user.isActive !== false);
-        const currentUser = override
+        const currentUser = (override ? members.find(user => user.id === override.id) : undefined)
+            || override
             || activeMembers.find(user => user.id === family?.ownerUserId)
             || activeMembers[0]
             || members[0]

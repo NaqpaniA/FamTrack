@@ -8,6 +8,7 @@ import type { AppData } from '../types.js';
 import { DEFAULT_FAMILY_SETTINGS } from '../settings.model.js';
 import { FamTrackDatabase } from './database.js';
 import { DomainError } from './domain.js';
+import { filterForActor } from './rbac.js';
 import {
     completeRoutine,
     dateInTimezone,
@@ -16,7 +17,8 @@ import {
     recordRoutineUnit,
     saveRoutine,
     skipRoutine,
-    summarizeRoutineScopes
+    summarizeRoutineScopes,
+    summarizeRoutines
 } from './routines.js';
 
 const at = (iso: string) => Date.parse(iso);
@@ -190,16 +192,85 @@ test('accumulator units are credited in bounded batches without double reward', 
     }, actor, () => at('2026-08-10T08:00:00.000Z'), idFactory);
     const withUnits = recordRoutineUnit(created, created.routines![0].id, 4, actor, () => at('2026-08-10T09:00:00.000Z'), idFactory);
     const startingXp = actor.xp;
+    assert.equal(withUnits.routines![0].accumulatedUnits, 4);
+    assert.equal(withUnits.members.find(member => member.id === actor.id)?.xp, startingXp, 'recording physical units must not award XP');
+    assert.equal(withUnits.rewardLogs.length, created.rewardLogs.length);
+    assert.equal(withUnits.routineEvents!.at(-1)?.type, 'UNIT_RECORDED');
+    assert.equal(withUnits.routineEvents!.at(-1)?.xpAwarded, undefined);
     const firstBatch = completeRoutine(withUnits, { routineId: withUnits.routines![0].id, units: 3 }, actor, () => at('2026-08-10T10:00:00.000Z'), idFactory);
     assert.equal(firstBatch.routines![0].accumulatedUnits, 1);
-    assert.equal(firstBatch.members.find(member => member.id === actor.id)?.xp, startingXp + 60);
+    assert.equal(firstBatch.routines![0].streak, 3);
+    assert.equal(firstBatch.members.find(member => member.id === actor.id)?.xp, startingXp + 70);
+    assert.equal(firstBatch.routineEvents!.at(-1)?.streakBonus, 10);
     const secondBatch = completeRoutine(firstBatch, { routineId: firstBatch.routines![0].id, units: 1 }, actor, () => at('2026-08-10T11:00:00.000Z'), idFactory);
     assert.equal(secondBatch.routines![0].accumulatedUnits, 0);
-    assert.equal(secondBatch.members.find(member => member.id === actor.id)?.xp, startingXp + 80);
+    assert.equal(secondBatch.routines![0].streak, 4);
+    assert.equal(secondBatch.members.find(member => member.id === actor.id)?.xp, startingXp + 90);
     assert.throws(
         () => completeRoutine(secondBatch, { routineId: secondBatch.routines![0].id, units: 1 }, actor, () => at('2026-08-10T12:00:00.000Z'), idFactory),
         (error: unknown) => error instanceof DomainError && error.status === 409
     );
+});
+
+test('an accumulator batch advances streak per unit and sums every crossed milestone', () => {
+    const data = cloneData();
+    const actor = data.members[0];
+    const idFactory = ids();
+    const created = saveRoutine(data, {
+        presetId: 'TRASH',
+        assignmentMode: 'FREE',
+        timezone: 'UTC'
+    }, actor, () => at('2026-08-10T08:00:00.000Z'), idFactory);
+    created.routines![0].streak = 2;
+    const recorded = recordRoutineUnit(created, created.routines![0].id, 29, actor, () => at('2026-08-10T09:00:00.000Z'), idFactory);
+    const startingXp = actor.xp;
+    const completed = completeRoutine(recorded, {
+        routineId: recorded.routines![0].id,
+        units: 29
+    }, actor, () => at('2026-08-10T10:00:00.000Z'), idFactory);
+    const event = completed.routineEvents!.at(-1)!;
+
+    assert.equal(completed.routines![0].streak, 31);
+    assert.equal(event.streakBonus, 10 + 25 + 100);
+    assert.equal(event.xpAwarded, 20 * 29 + 135);
+    assert.equal(completed.members.find(member => member.id === actor.id)?.xp, startingXp + 20 * 29 + 135);
+});
+
+test('accumulator completion credits the fixed assignee and the free-mode actor', () => {
+    for (const assignmentMode of ['FIXED', 'FREE'] as const) {
+        const data = cloneData();
+        const owner = data.members[0];
+        const other = data.members[1];
+        const idFactory = ids();
+        const created = saveRoutine(data, {
+            presetId: 'DISHWASHER',
+            assignmentMode,
+            ...(assignmentMode === 'FIXED' ? { assigneeIds: [other.id] } : {}),
+            timezone: 'UTC'
+        }, owner, () => at('2026-08-10T08:00:00.000Z'), idFactory);
+        const actor = assignmentMode === 'FIXED' ? owner : other;
+        const recorded = recordRoutineUnit(created, created.routines![0].id, 1, actor, () => at('2026-08-10T09:00:00.000Z'), idFactory);
+        const ownerXp = recorded.members.find(member => member.id === owner.id)!.xp;
+        const otherXp = recorded.members.find(member => member.id === other.id)!.xp;
+        const completed = completeRoutine(recorded, { routineId: recorded.routines![0].id, units: 1 }, actor, () => at('2026-08-10T10:00:00.000Z'), idFactory);
+
+        assert.equal(completed.members.find(member => member.id === owner.id)?.xp, ownerXp);
+        assert.ok(completed.members.find(member => member.id === other.id)!.xp > otherXp);
+        assert.equal(completed.routineEvents!.at(-1)?.payload?.creditedUserId, other.id);
+    }
+});
+
+test('routine summaries count only rewarded completions', () => {
+    const data = cloneData();
+    data.routineEvents = [
+        { id: 'unit', routineId: 'routine', type: 'UNIT_RECORDED', actorId: data.currentUser.id, units: 5, timestamp: at('2026-08-10T08:00:00.000Z') },
+        { id: 'legacy', routineId: 'routine', type: 'COMPLETED', actorId: data.currentUser.id, units: 4, timestamp: at('2026-08-10T08:01:00.000Z') },
+        { id: 'rewarded', routineId: 'routine', type: 'COMPLETED', actorId: data.currentUser.id, units: 2, xpAwarded: 40, timestamp: at('2026-08-10T08:02:00.000Z') }
+    ];
+
+    const summary = summarizeRoutines(data, at('2026-08-10T12:00:00.000Z'));
+    assert.equal(summary.completedToday, 2);
+    assert.equal(summary.xpToday, 40);
 });
 
 test('pause and skip preserve a single open occurrence and round robin ignores inactive members', () => {
@@ -303,4 +374,53 @@ test('routine command persists only its registered collections and survives reop
     assert.equal(reopened.getAppData().routines?.[0].title, 'Полить растения');
     assert.equal(reopened.getAppData().tasks.filter(task => !!task.routineTemplateId).length, 1);
     reopened.close();
+});
+
+test('accumulator command replay awards once and returns the fresh current-user projection', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'famtrack-routine-replay-'));
+    const dbPath = path.join(directory, 'famtrack.sqlite');
+    const db = await FamTrackDatabase.open(dbPath);
+    const before = db.exportEnvelope();
+    const staleActor = { ...before.data.currentUser };
+    const idFactory = ids();
+    const saved = db.mutateCommand(before.data.family!.id, before.revision, {
+        mutationId: 'mutation-routine-replay-save',
+        actorId: staleActor.id,
+        operation: '/api/routines/save',
+        requestHash: 'routine-replay-save'
+    }, data => saveRoutine(data, {
+        presetId: 'TRASH',
+        assignmentMode: 'FREE',
+        timezone: 'UTC'
+    }, staleActor, () => at('2026-08-10T08:00:00.000Z'), idFactory), staleActor);
+    const routineId = saved.data.routines![0].id;
+    const recorded = db.mutateCommand(before.data.family!.id, saved.revision, {
+        mutationId: 'mutation-routine-replay-record',
+        actorId: staleActor.id,
+        operation: '/api/routines/record-unit',
+        requestHash: 'routine-replay-record'
+    }, data => recordRoutineUnit(data, routineId, 2, staleActor, () => at('2026-08-10T09:00:00.000Z'), idFactory), staleActor);
+    const completionReceipt = {
+        mutationId: 'mutation-routine-replay-complete',
+        actorId: staleActor.id,
+        operation: '/api/routines/complete',
+        requestHash: 'routine-replay-complete'
+    };
+    const completed = db.mutateCommand(before.data.family!.id, recorded.revision, completionReceipt, data => (
+        completeRoutine(data, { routineId, units: 2 }, staleActor, () => at('2026-08-10T10:00:00.000Z'), idFactory)
+    ), staleActor);
+    const replayed = db.mutateCommand(before.data.family!.id, recorded.revision, completionReceipt, data => (
+        completeRoutine(data, { routineId, units: 2 }, staleActor, () => at('2026-08-10T10:00:00.000Z'), idFactory)
+    ), staleActor);
+    const member = replayed.data.members.find(candidate => candidate.id === staleActor.id)!;
+    const projected = filterForActor(replayed.data, staleActor);
+
+    assert.equal(replayed.command.duplicate, true);
+    assert.equal(replayed.revision, completed.revision);
+    assert.equal(replayed.data.routineEvents!.filter(event => event.routineId === routineId && event.type === 'COMPLETED').length, 1);
+    assert.equal(replayed.data.rewardLogs.filter(log => log.description.startsWith('Рутина:')).length, 1);
+    assert.equal(replayed.data.currentUser.xp, member.xp);
+    assert.equal(projected.currentUser.xp, member.xp);
+    assert.ok(member.xp > staleActor.xp);
+    db.close();
 });
