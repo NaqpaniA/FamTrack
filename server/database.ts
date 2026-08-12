@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
 import { INITIAL_DATA } from '../data.js';
-import type { AiHelperType, AiUsage, AppData, DashboardPreferences, Family, FamilyInvite } from '../types.js';
+import { DEFAULT_DASHBOARD_HIDDEN_WIDGETS, type AiHelperType, type AiUsage, type AppData, type DashboardPreferences, type Family, type FamilyInvite } from '../types.js';
 import type { User, Role } from '../family.model.js';
 import type { Task, Epic } from '../tasks.model.js';
 import type {
@@ -27,7 +27,7 @@ import type { RoutineEvent, RoutineTemplate } from '../routines.model.js';
 import type { Wishlist } from '../wishlist.model.js';
 import type { PantryMovement, PantryProduct } from '../pantry.model.js';
 import type { PurchaseImportFile, PurchaseImportItem, PurchaseImportJob } from '../purchase-import.model.js';
-import { summarizeRoutines } from './routines.js';
+import { summarizeRoutines, summarizeRoutineScopes } from './routines.js';
 
 const require = createRequire(import.meta.url);
 
@@ -435,7 +435,7 @@ export class FamTrackDatabase {
         const dashboardPreferences = parseJson<DashboardPreferences>(preferenceRow?.data_json, {
             userId: currentUser.id,
             scope: 'FAMILY',
-            hiddenWidgets: [],
+            hiddenWidgets: [...DEFAULT_DASHBOARD_HIDDEN_WIDGETS],
             widgetOrder: [],
             weatherOptIn: false
         });
@@ -498,6 +498,7 @@ export class FamTrackDatabase {
             purchaseImports
         };
         data.routineSummary = summarizeRoutines(data);
+        data.routineSummaries = summarizeRoutineScopes(data, currentUser.id);
         return data;
     }
 

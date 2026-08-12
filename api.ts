@@ -152,7 +152,22 @@ export class ServerAdapter implements ApiInterface {
     }
 
     retryOutbox() {
-        return this.requestQueue.enqueue(() => this.flushThrough());
+        return this.requestQueue.enqueue(async () => {
+            const records = await this.outbox.list();
+            for (const record of records) {
+                if (record.needsReview || record.attempts >= 5) {
+                    await this.outbox.put({
+                        ...record,
+                        attempts: 0,
+                        lastAttemptAt: undefined,
+                        lastError: undefined,
+                        needsReview: false
+                    });
+                }
+            }
+            await this.refreshSaveState();
+            return this.flushThrough();
+        });
     }
 
     private authHeaders(): HeadersInit {

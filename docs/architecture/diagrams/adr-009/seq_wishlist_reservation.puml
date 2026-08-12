@@ -1,0 +1,63 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+    $B("POST /api/wishlists/items/{reserve|release}")
+    $SM($MUTED("Spoiler-safe reservation of another family member's wish"))
+end title
+footer $SM($MUTED("Wishlist JSON source of truth / owner projection strips reservation / mutationId idempotency"))
+
+box "User / Telegram Mini App" $L_USER
+    actor "Family member" as actor
+    boundary "Wishlist widget" as ui <<p_chg>>
+end box
+box "FamTrack API" $L_API
+    boundary "Command endpoint" as api <<p_chg>>
+end box
+box "Wishlist domain" $L_CORE
+    control "Wishlist service" as wishes <<p_chg>>
+end box
+box "State" $L_DATA
+    database "SQLite aggregate + receipts" as db <<p_chg>>
+end box
+
+activate actor
+actor -[$C_CHG]> ui : reserve/release(wishlistId, itemId)
+activate ui
+ui -[$C_CHG]> api : POST /api/wishlists/items/{reserve|release}\n{revision, mutationId, wishlistId, itemId}
+activate api
+api -[$C_CHG]> db : find receipt + load wishlist/item/current reservation
+activate db
+db --[$C_CHG]> api : duplicate | wishlist/item/reservedById | notFound
+deactivate db
+
+break#$FR_CRIT_HEAD #$FR_CRIT_BG personal list OR own wish OR conflicting reserver OR forbidden release
+    api --[$C_CHG]> ui : 403 SPOILER_GUARD | 409 ALREADY_RESERVED | 404 NOT_FOUND
+    ui --[$C_CHG]> actor : keep current projection and show conflict
+end
+
+alt#$FR_INFO_HEAD #$FR_INFO_BG exact duplicate
+    api -[$C_CHG]> api : reuse receipt; no second reservation write
+else #$FR_INFO_BG new command
+    api -[$C_CHG]> wishes : setReservation(itemId, actorId, reserved): ReservationDecision
+    activate wishes
+    wishes -[$C_CHG]> wishes : reserve -> actorId + timestamp; release -> clear fields
+    wishes --[$C_CHG]> api : updated wishlist
+    deactivate wishes
+    api -[$C_CHG]> db : atomic wishlist/receipt/revision write
+    activate db
+    db --[$C_CHG]> api : committed aggregate
+    deactivate db
+end
+
+api -[$C_CHG]> api : filterWishlistsForActor(actor)\n(strip reservedById/reservedAt when actor owns wish)
+api --[$C_CHG]> ui : 200 spoiler-safe AppData projection
+deactivate api
+ui --[$C_CHG]> actor : show reserved/released state allowed for this actor
+deactivate ui
+deactivate actor
+
+SEQ_LEGEND_STATUS()
+@enduml

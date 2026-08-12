@@ -1,0 +1,88 @@
+!theme plain
+
+skinparam shadowing false
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 13
+skinparam TitleFontSize 18
+skinparam TitleFontStyle bold
+skinparam BackgroundColor #FFFFFF
+skinparam responseMessageBelowArrow true
+skinparam sequenceMessageAlign left
+skinparam sequence {
+  ArrowThickness 2
+  ParticipantPadding 22
+  BoxPadding 10
+  LifeLineBorderColor #B0BEC5
+  LifeLineBackgroundColor #FFFFFF
+}
+skinparam noteBackgroundColor #FFF8E1
+skinparam noteBorderColor #FFB300
+
+!$C_NEW = "#00C853"
+!$C_CHG = "#2962FF"
+!$C_DEL = "#D50000"
+!$C_CFG = "#7E57C2"
+!$C_NEUTRAL = "#64748B"
+
+!$L_USER = "#F5F7FA"
+!$L_API = "#EEF4FF"
+!$L_CORE = "#F5F7FA"
+!$L_DATA = "#ECFDF3"
+!$L_OPS = "#FFF7ED"
+
+!$FR_INFO_HEAD = "D8E2F1"
+!$FR_INFO_BG = "EEF4FF"
+!$FR_WARN_HEAD = "E8D9B5"
+!$FR_WARN_BG = "FFF8E1"
+!$FR_CRIT_HEAD = "E7C9C9"
+!$FR_CRIT_BG = "FFEBEE"
+
+!function $B($TEXT)
+  !return "<b>" + $TEXT + "</b>"
+!endfunction
+
+!function $SM($TEXT)
+  !return "<size:12>" + $TEXT + "</size>"
+!endfunction
+
+!function $MUTED($TEXT)
+  !return "<color:#607D8B>" + $TEXT + "</color>"
+!endfunction
+
+!procedure SEQ_LEGEND_STATUS()
+legend top left
+  |= Цвет |= Изменение |
+  |<$C_NEW> | новое |
+  |<$C_CHG> | изменённое AS IS |
+  |<$C_DEL> | удалённое/запрещённое |
+  |<$C_CFG> | изменение конфигурации |
+endlegend
+!endprocedure
+
+<style>
+sequenceDiagram {
+  participant {
+    LineColor #90A4AE
+    BackGroundColor #FFFFFF
+    FontColor #263238
+  }
+  .p_new {
+    ShowStereotype false
+    BackGroundColor #E8F5E9
+    LineColor #00C853
+    FontColor #1B5E20
+  }
+  .p_chg {
+    ShowStereotype false
+    BackGroundColor #EEF4FF
+    LineColor #2962FF
+    FontColor #0D47A1
+  }
+  .p_cfg {
+    ShowStereotype false
+    BackGroundColor #EDEFF7
+    LineColor #7E57C2
+    FontColor #4A3B76
+  }
+}
+</style>

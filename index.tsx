@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, ArrowRight, Bot, CheckCircle2, CheckSquare, Layout, Loader2, MessageCircle, RefreshCw, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CheckSquare, Layout, Loader2, MessageCircle, RefreshCw, ShieldCheck, ShoppingBag, Users, Wallet } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles.css';
 
@@ -22,6 +22,7 @@ import { ShoppingScreen } from './shopping.ui';
 import { SettingsModal } from './settings.ui';
 import { BottomNav, Modal, ToastContainer, StreakModal } from './ui-kit';
 import { NotesSheet } from './notes.ui';
+import { SaveStateIndicator } from './save-state.ui';
 
 // --- Query Client Setup ---
 const queryClient = new QueryClient({
@@ -314,29 +315,7 @@ const FamTrackApp = () => {
 
   return (
     <div className="telegram-shell text-gray-950 font-sans selection:bg-blue-100 transition-colors duration-300 bg-[#f5f6f8]">
-       <button
-          type="button"
-          className="save-state-pill min-h-9 px-3 py-2 text-xs font-bold flex items-center justify-center gap-2"
-          onClick={() => saveState.status !== 'SAVED' && api.retryOutbox()}
-          disabled={saveState.status === 'SAVED'}
-          aria-live="polite"
-          title={saveState.message || undefined}
-       >
-          {saveState.status === 'SAVED' ? (
-              <CheckCircle2 size={15} className="text-emerald-500" />
-          ) : saveState.status === 'SAVING' ? (
-              <Loader2 size={15} className="animate-spin text-blue-500" />
-          ) : (
-              <AlertTriangle size={15} className="text-amber-500" />
-          )}
-          <span>
-              {saveState.status === 'SAVED'
-                  ? 'Сохранено'
-                  : saveState.status === 'SAVING'
-                      ? `Сохраняется${saveState.pending > 1 ? ` · ${saveState.pending}` : ''}`
-                      : `Нужна проверка${saveState.pending > 1 ? ` · ${saveState.pending}` : ''}`}
-          </span>
-       </button>
+       <SaveStateIndicator state={saveState} onRetry={() => api.retryOutbox()} />
        <ToastContainer toasts={toasts} removeToast={removeToast} />
        
        {/* Daily Bonus Modal */}
@@ -359,6 +338,7 @@ const FamTrackApp = () => {
                 onTaskClick={t => { setEditingTask(t); setTaskModalOpen(true); }} 
                 onTaskStatusChange={actions.tasks.toggleStatus}
                 onNavigate={handleNavigate}
+                onAddTask={() => { setEditingTask(null); setTaskModalOpen(true); }}
                 onAddEpic={() => openEpicModal()}
                 onOpenProfile={() => setSettingsOpen(true)}
                 onOpenNotes={() => openNotes('list')}
@@ -369,6 +349,7 @@ const FamTrackApp = () => {
                     completeRoutine: actions.routines.complete,
                     recordRoutineUnit: actions.routines.recordUnit,
                     skipRoutine: actions.routines.skip,
+                    pendingRoutineIds: actions.routines.pendingIds,
                     savePreferences: actions.routines.savePreferences,
                     saveWishlist: actions.wishlists.save,
                     saveWishlistItem: actions.wishlists.saveItem,
@@ -384,6 +365,7 @@ const FamTrackApp = () => {
 	                onAddTask={() => { setEditingTask(null); setTaskModalOpen(true); }}
 	                onStatusChange={actions.tasks.toggleStatus}
 	                onRoutineComplete={actions.routines.complete}
+	                pendingRoutineIds={actions.routines.pendingIds}
 	                onMoveTask={actions.tasks.move}
 	                onAddEpic={() => openEpicModal()}
 	                onEditEpic={(epic) => openEpicModal(epic)}
@@ -449,10 +431,11 @@ const FamTrackApp = () => {
               currentUser={data.currentUser}
               onSave={handleTaskSave} 
               onDelete={handleTaskDelete} 
-              onRoutineComplete={(routineId, taskId) => {
-                  actions.routines.complete(routineId, taskId);
-                  setTaskModalOpen(false);
+              onRoutineComplete={async (routineId, taskId) => {
+                  const completed = await actions.routines.complete(routineId, taskId);
+                  if (completed) setTaskModalOpen(false);
               }}
+              routinePending={!!editingTask?.routineTemplateId && actions.routines.pendingIds.has(editingTask.routineTemplateId)}
             />
        </Modal>
 

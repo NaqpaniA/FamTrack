@@ -1,11 +1,14 @@
-import type { AppData, DashboardPreferences } from '../types.js';
+import {
+    DASHBOARD_WIDGET_IDS,
+    DEFAULT_DASHBOARD_HIDDEN_WIDGETS,
+    type AppData,
+    type DashboardPreferences,
+    type DashboardWidgetId
+} from '../types.js';
 import type { User } from '../family.model.js';
 import { DomainError } from './domain.js';
 
-const KNOWN_WIDGETS = new Set([
-    'routines', 'accumulators', 'next-focus', 'day-pulse', 'house-health',
-    'history', 'leaderboard', 'projects', 'activity', 'notes', 'weather'
-]);
+const KNOWN_WIDGETS = new Set<string>(DASHBOARD_WIDGET_IDS);
 
 export const updateDashboardPreferences = (data: AppData, raw: unknown, actor: User): AppData => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new DomainError('Preferences payload is required');
@@ -13,12 +16,12 @@ export const updateDashboardPreferences = (data: AppData, raw: unknown, actor: U
     const previous = data.dashboardPreferences || {
         userId: actor.id,
         scope: 'FAMILY' as const,
-        hiddenWidgets: [],
+        hiddenWidgets: [...DEFAULT_DASHBOARD_HIDDEN_WIDGETS],
         widgetOrder: [],
         weatherOptIn: false
     };
-    const normalizeWidgets = (value: unknown, fallback: string[]) => Array.isArray(value)
-        ? [...new Set(value.filter((item): item is string => typeof item === 'string' && KNOWN_WIDGETS.has(item)))]
+    const normalizeWidgets = (value: unknown, fallback: DashboardWidgetId[]) => Array.isArray(value)
+        ? [...new Set(value.filter((item): item is DashboardWidgetId => typeof item === 'string' && KNOWN_WIDGETS.has(item)))]
         : fallback;
     const preferences: DashboardPreferences = {
         userId: actor.id,

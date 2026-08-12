@@ -15,7 +15,8 @@ import {
     pauseRoutine,
     recordRoutineUnit,
     saveRoutine,
-    skipRoutine
+    skipRoutine,
+    summarizeRoutineScopes
 } from './routines.js';
 
 const at = (iso: string) => Date.parse(iso);
@@ -39,12 +40,42 @@ const cloneData = (): AppData => {
 };
 
 test('routine schedules cover weekdays, intervals, month ends and annual dates', () => {
+    assert.equal(nextRoutineOccurrence({ kind: 'DAILY' }, '2026-08-01', '2026-08-10'), '2026-08-11');
     assert.equal(nextRoutineOccurrence({ kind: 'WEEKDAYS', weekDays: [1, 3] }, '2026-08-01', '2026-08-10'), '2026-08-12');
     assert.equal(nextRoutineOccurrence({ kind: 'INTERVAL_DAYS', interval: 3 }, '2026-08-01', '2026-08-09'), '2026-08-10');
     assert.equal(nextRoutineOccurrence({ kind: 'INTERVAL_WEEKS', interval: 2, weekDays: [2] }, '2026-08-04', '2026-08-11'), '2026-08-18');
     assert.equal(nextRoutineOccurrence({ kind: 'MONTHLY', dayOfMonth: 31 }, '2026-01-01', '2026-02-01', true), '2026-02-28');
     assert.equal(nextRoutineOccurrence({ kind: 'YEARLY', month: 2, day: 29 }, '2025-01-01', '2026-01-01', true), '2026-02-28');
     assert.equal(dateInTimezone(at('2026-08-10T21:30:00.000Z'), 'Europe/Moscow'), '2026-08-11');
+});
+
+test('routine summaries isolate the current personal scope from the family scope', () => {
+    const data = cloneData();
+    const actor = data.members[0];
+    const other = data.members[1];
+    const idFactory = ids();
+    const base = {
+        kind: 'SCHEDULED' as const,
+        schedule: { kind: 'DAILY' as const },
+        assignmentMode: 'FREE' as const,
+        startDate: '2026-08-11',
+        timezone: 'UTC'
+    };
+    const withFamily = saveRoutine(data, { ...base, title: 'Family', visibility: 'FAMILY' }, actor, () => at('2026-08-11T08:00:00.000Z'), idFactory);
+    const withPersonal = saveRoutine(withFamily, { ...base, title: 'Mine', visibility: 'PERSONAL' }, actor, () => at('2026-08-11T08:01:00.000Z'), idFactory);
+    const withOtherPersonal = saveRoutine(withPersonal, { ...base, title: 'Other private', visibility: 'PERSONAL' }, other, () => at('2026-08-11T08:02:00.000Z'), idFactory);
+    const familyRoutine = withOtherPersonal.routines!.find(routine => routine.title === 'Family')!;
+    const mine = withOtherPersonal.routines!.find(routine => routine.title === 'Mine')!;
+    withOtherPersonal.routineEvents!.push(
+        { id: 'family-complete', routineId: familyRoutine.id, type: 'COMPLETED', actorId: actor.id, units: 1, xpAwarded: 20, timestamp: at('2026-08-11T09:00:00.000Z') },
+        { id: 'personal-complete', routineId: mine.id, type: 'COMPLETED', actorId: actor.id, units: 1, xpAwarded: 30, timestamp: at('2026-08-11T09:01:00.000Z') }
+    );
+
+    const summaries = summarizeRoutineScopes(withOtherPersonal, actor.id, at('2026-08-11T10:00:00.000Z'));
+    assert.deepEqual(summaries.FAMILY.houseHealth.items.map(item => item.title), ['Family']);
+    assert.deepEqual(summaries.PERSONAL.houseHealth.items.map(item => item.title), ['Mine']);
+    assert.equal(summaries.FAMILY.xpToday, 20);
+    assert.equal(summaries.PERSONAL.xpToday, 30);
 });
 
 test('scheduled completion awards matrix XP once, advances from schedule and applies streak milestones', () => {
@@ -76,6 +107,32 @@ test('scheduled completion awards matrix XP once, advances from schedule and app
         () => completeRoutine(completed, { routineId: completed.routines![0].id, taskId }, actor, () => at('2026-08-10T10:00:00.000Z'), idFactory),
         (error: unknown) => error instanceof DomainError && error.status === 409
     );
+});
+
+test('scheduled streak milestones award bonuses at 3, 7 and every 30 completions', () => {
+    for (const [milestone, expectedBonus] of [[3, 10], [7, 25], [30, 100]] as const) {
+        const data = cloneData();
+        const actor = data.members[0];
+        const idFactory = ids();
+        const created = saveRoutine(data, {
+            title: `Milestone ${milestone}`,
+            kind: 'SCHEDULED',
+            schedule: { kind: 'DAILY' },
+            difficulty: 'EASY',
+            priority: 'LOW',
+            assignmentMode: 'FREE',
+            startDate: '2026-08-10',
+            timezone: 'UTC'
+        }, actor, () => at('2026-08-10T08:00:00.000Z'), idFactory);
+        created.routines![0].streak = milestone - 1;
+        const startingXp = actor.xp;
+        const completed = completeRoutine(created, { routineId: created.routines![0].id }, actor, () => at('2026-08-10T09:00:00.000Z'), idFactory);
+        const event = completed.routineEvents!.find(candidate => candidate.type === 'COMPLETED');
+
+        assert.equal(event?.streak, milestone);
+        assert.equal(event?.streakBonus, expectedBonus);
+        assert.equal(completed.members.find(member => member.id === actor.id)?.xp, startingXp + 15 + expectedBonus);
+    }
 });
 
 test('late scheduled completion resets streak and creates no missed-period backlog', () => {
@@ -163,10 +220,64 @@ test('pause and skip preserve a single open occurrence and round robin ignores i
     assert.equal(paused.tasks.find(task => task.id === paused.routines![0].openTaskId)?.status, 'WAITING');
     const resumed = pauseRoutine(paused, paused.routines![0].id, false, actor, () => 3, idFactory);
     resumed.members = resumed.members.map(member => member.id === second.id ? { ...member, isActive: false } : member);
+    const xpBeforeSkip = resumed.members.find(member => member.id === actor.id)?.xp;
+    const rewardLogsBeforeSkip = resumed.rewardLogs.length;
     const skipped = skipRoutine(resumed, resumed.routines![0].id, actor, () => at('2026-08-10T09:00:00.000Z'), idFactory);
     const open = skipped.tasks.find(task => task.id === skipped.routines![0].openTaskId);
     assert.equal(open?.assigneeId, actor.id);
+    assert.equal(skipped.members.find(member => member.id === actor.id)?.xp, xpBeforeSkip);
+    assert.equal(skipped.rewardLogs.length, rewardLogsBeforeSkip);
+    assert.equal(skipped.routineEvents!.at(-1)?.type, 'SKIPPED');
+    assert.equal(skipped.routineEvents!.at(-1)?.xpAwarded, undefined);
     assert.equal(skipped.tasks.filter(task => task.routineTemplateId === skipped.routines![0].id && !['DONE', 'DROPPED'].includes(task.status)).length, 1);
+});
+
+test('round robin assigns successive occurrences to successive active members', () => {
+    const data = cloneData();
+    const first = data.members[0];
+    const second = data.members[1];
+    const idFactory = ids();
+    const created = saveRoutine(data, {
+        title: 'Rotation',
+        kind: 'SCHEDULED',
+        schedule: { kind: 'DAILY' },
+        assignmentMode: 'ROUND_ROBIN',
+        assigneeIds: [first.id, second.id],
+        startDate: '2026-08-10',
+        timezone: 'UTC'
+    }, first, () => at('2026-08-10T08:00:00.000Z'), idFactory);
+    const firstTask = created.tasks.find(task => task.id === created.routines![0].openTaskId)!;
+    assert.equal(firstTask.assigneeId, first.id);
+
+    const firstCompletion = completeRoutine(created, { routineId: created.routines![0].id, taskId: firstTask.id }, first, () => at('2026-08-10T09:00:00.000Z'), idFactory);
+    const secondTask = firstCompletion.tasks.find(task => task.id === firstCompletion.routines![0].openTaskId)!;
+    assert.equal(secondTask.assigneeId, second.id);
+
+    const secondCompletion = completeRoutine(firstCompletion, { routineId: firstCompletion.routines![0].id, taskId: secondTask.id }, second, () => at('2026-08-11T09:00:00.000Z'), idFactory);
+    const thirdTask = secondCompletion.tasks.find(task => task.id === secondCompletion.routines![0].openTaskId)!;
+    assert.equal(thirdTask.assigneeId, first.id);
+});
+
+test('editing a routine preserves its id and never creates a second open occurrence', () => {
+    const data = cloneData();
+    const actor = data.members[0];
+    const idFactory = ids();
+    const created = saveRoutine(data, {
+        title: 'Stable routine',
+        kind: 'SCHEDULED',
+        schedule: { kind: 'DAILY' },
+        assignmentMode: 'FREE',
+        startDate: '2026-08-11',
+        timezone: 'UTC'
+    }, actor, () => at('2026-08-11T08:00:00.000Z'), idFactory);
+    const original = created.routines![0];
+    const edited = saveRoutine(created, { ...original, title: 'Renamed routine' }, actor, () => at('2026-08-11T09:00:00.000Z'), idFactory);
+
+    assert.equal(edited.routines!.length, 1);
+    assert.equal(edited.routines![0].id, original.id);
+    assert.equal(edited.routines![0].openTaskId, original.openTaskId);
+    assert.equal(edited.tasks.filter(task => task.routineTemplateId === original.id && !['DONE', 'DROPPED'].includes(task.status)).length, 1);
+    assert.equal(edited.routineEvents!.at(-1)?.type, 'UPDATED');
 });
 
 test('routine command persists only its registered collections and survives reopen', async () => {

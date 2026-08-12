@@ -1,0 +1,72 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+    $B("POST /api/routines/save")
+    $SM($MUTED("Create from confirmed preset or update a stable RoutineTemplate"))
+end title
+footer $SM($MUTED("RoutineTemplate + one open Task / mutationId idempotency / SQLite source of truth"))
+
+box "User / Telegram Mini App" $L_USER
+    actor "Family member" as actor
+    boundary "Routine editor" as ui <<p_chg>>
+end box
+box "FamTrack API" $L_API
+    boundary "Command endpoint" as api <<p_chg>>
+end box
+box "Routine domain" $L_CORE
+    control "Routine service" as routine <<p_chg>>
+end box
+box "State" $L_DATA
+    database "SQLite aggregate + receipts" as db <<p_chg>>
+end box
+
+activate actor
+actor -[$C_CHG]> ui : confirm editor(RoutineDraft)
+activate ui
+ui -[$C_CHG]> api : POST /api/routines/save\n{revision, mutationId, routine{id?, presetId?, title, kind,\nschedule?, assignmentMode, assigneeIds, visibility,\ndifficulty, priority, startDate, endDate?, time?, timezone, unitLabel?}}
+activate api
+api -[$C_CHG]> api : validate auth, feature flag, envelope and mutationId
+break#$FR_CRIT_HEAD #$FR_CRIT_BG invalid envelope OR ROUTINES disabled
+    api --[$C_CHG]> ui : 400 VALIDATION_ERROR | 404 FEATURE_DISABLED
+    ui --[$C_CHG]> actor : keep editor open and show error
+end
+
+api -[$C_CHG]> db : find command_receipt(familyId, mutationId)\nand load current aggregate
+activate db
+db --[$C_CHG]> api : exact duplicate | current routines/tasks/members
+deactivate db
+
+alt#$FR_INFO_HEAD #$FR_INFO_BG exact duplicate mutationId + request hash
+    api -[$C_CHG]> api : reuse authoritative result; do not apply again
+else #$FR_INFO_BG new command
+    api -[$C_CHG]> routine : saveRoutine(actor, RoutineDraft): RoutineDecision
+    activate routine
+    routine -[$C_CHG]> routine : validate RBAC, timezone, dates, schedule and assignees
+    alt#$FR_CRIT_HEAD #$FR_CRIT_BG invalid fields OR forbidden existing template
+        routine --[$C_CHG]> api : RoutineDecision(error 400 | 403 | 422)
+    else #$FR_INFO_BG valid draft
+        routine -[$C_CHG]> routine : preserve existing id and openTaskId;\ncompute next occurrence only when schedule changed
+        routine --[$C_CHG]> api : RoutineDecision(saved template +\nzero-or-one open task + CREATED/UPDATED event)
+    end
+    deactivate routine
+    break#$FR_CRIT_HEAD #$FR_CRIT_BG RoutineDecision == error
+        api --[$C_CHG]> ui : 400 | 403 | 422 error code + message
+        ui --[$C_CHG]> actor : keep editor open and identify invalid field
+    end
+    api -[$C_CHG]> db : transaction upsert template/task/event/receipt\nand increment family revision
+    activate db
+    db --[$C_CHG]> api : committed authoritative AppData
+    deactivate db
+end
+
+api --[$C_CHG]> ui : 200 {revision, data, command{mutationId, duplicate?}}
+deactivate api
+ui --[$C_CHG]> actor : close editor; show saved routine once
+deactivate ui
+deactivate actor
+
+SEQ_LEGEND_STATUS()
+@enduml

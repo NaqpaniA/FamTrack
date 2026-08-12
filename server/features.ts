@@ -28,6 +28,7 @@ export const applyCapabilities = (data: AppData, capabilities: FeatureCapabiliti
     routines: capabilities.routines ? data.routines || [] : [],
     routineEvents: capabilities.routines ? data.routineEvents || [] : [],
     routineSummary: capabilities.routines ? data.routineSummary : undefined,
+    routineSummaries: capabilities.routines ? data.routineSummaries : undefined,
     wishlists: capabilities.wishlists ? data.wishlists || [] : [],
     pantry: capabilities.pantry ? data.pantry : undefined
 });

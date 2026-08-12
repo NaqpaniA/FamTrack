@@ -1,0 +1,70 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+    $B("POST /api/routines/skip")
+    $SM($MUTED("Confirmed scheduled-occurrence skip with no XP"))
+end title
+footer $SM($MUTED("SKIPPED event / zero XP / one successor from schedule / mutationId idempotency"))
+
+box "User / Telegram Mini App" $L_USER
+    actor "Family member" as actor
+    boundary "Routine controls" as ui <<p_chg>>
+end box
+box "FamTrack API" $L_API
+    boundary "Command endpoint" as api <<p_chg>>
+end box
+box "Routine domain" $L_CORE
+    control "Routine service" as routine <<p_chg>>
+end box
+box "State" $L_DATA
+    database "SQLite aggregate + receipts" as db <<p_chg>>
+end box
+
+activate actor
+actor -[$C_CHG]> ui : tap skip(routineId)
+activate ui
+ui --[$C_CHG]> actor : confirm «skip without XP?»
+
+alt#$FR_WARN_HEAD #$FR_WARN_BG user cancels
+    actor -[$C_CHG]> ui : cancel
+    ui --[$C_CHG]> actor : leave occurrence unchanged
+else #$FR_INFO_BG user confirms
+    actor -[$C_CHG]> ui : confirm
+    ui -[$C_CHG]> ui : disable controls for routineId
+    ui -[$C_CHG]> api : POST /api/routines/skip\n{revision, mutationId, routineId}
+    activate api
+    api -[$C_CHG]> db : find receipt + load scheduled template/open task
+    activate db
+    db --[$C_CHG]> api : duplicate | current template/task | notFound
+    deactivate db
+    break#$FR_CRIT_HEAD #$FR_CRIT_BG not scheduled/open OR forbidden
+        api --[$C_CHG]> ui : 404 ROUTINE_NOT_FOUND | 403 FORBIDDEN | 409 NO_OPEN_OCCURRENCE
+        ui --[$C_CHG]> actor : re-enable controls and show error; no state change
+    end
+    alt#$FR_INFO_HEAD #$FR_INFO_BG exact duplicate
+        api -[$C_CHG]> api : reuse receipt; do not advance twice
+    else #$FR_INFO_BG new command
+        api -[$C_CHG]> routine : skipRoutine(routineId, actor): SkipDecision
+        activate routine
+        routine -[$C_CHG]> routine : old task -> DROPPED; streak -> 0; XP delta = 0;\nnext date from schedule; create zero-or-one successor
+        routine --[$C_CHG]> api : SKIPPED event + template/tasks
+        deactivate routine
+        api -[$C_CHG]> db : atomic template/tasks/event/receipt/revision write
+        activate db
+        db --[$C_CHG]> api : committed AppData
+        deactivate db
+    end
+    api --[$C_CHG]> ui : 200 authoritative state; xpAwarded=0
+    deactivate api
+    ui -[$C_CHG]> ui : re-enable controls for routineId
+    ui --[$C_CHG]> actor : show «Пропущено без XP» and next occurrence
+end
+
+deactivate ui
+deactivate actor
+
+SEQ_LEGEND_STATUS()
+@enduml

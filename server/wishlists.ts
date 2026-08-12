@@ -47,16 +47,21 @@ export const saveWishlistItem = (
     const wishlistId = stringValue(raw.wishlistId, '', 120);
     const wishlist = (data.wishlists || []).find(list => list.id === wishlistId);
     if (!wishlist) throw new DomainError('Wishlist not found', 404);
-    if (!canManageWishlist(wishlist, actor)) throw new DomainError('You are not allowed to add wishes here', 403);
     const id = stringValue(raw.id, `wish-${idFactory()}`, 120);
     const previous = wishlist.items.find(item => item.id === id);
-    const ownerId = optionalMemberId(raw.ownerId, data) || previous?.ownerId || wishlist.ownerId || actor.id;
+    if (previous ? !canManageWish(previous, wishlist, actor) : !canAddWish(wishlist, actor)) {
+        throw new DomainError(previous ? 'You are not allowed to edit this wish' : 'You are not allowed to add wishes here', 403);
+    }
+    const privileged = actor.role === 'OWNER' || actor.role === 'ADMIN';
+    const requestedOwnerId = optionalMemberId(raw.ownerId, data);
+    const ownerId = previous?.ownerId || (privileged ? requestedOwnerId : actor.id) || wishlist.ownerId || actor.id;
+    const url = raw.url === undefined ? previous?.url : optionalHttpsUrl(raw.url);
     const item: WishlistItem = {
         id,
         wishlistId,
         title: stringValue(raw.title, previous?.title || '', 180),
-        description: optionalString(raw.description, 1000) || previous?.description,
-        url: safeHttpsUrl(raw.url) || previous?.url,
+        description: raw.description === undefined ? previous?.description : optionalString(raw.description, 1000),
+        url,
         priority: raw.priority === 'HIGH' || raw.priority === 'LOW' || raw.priority === 'MEDIUM' ? raw.priority : previous?.priority || 'MEDIUM',
         ownerId,
         createdById: previous?.createdById || actor.id,
@@ -78,8 +83,9 @@ export const deleteWishlistItem = (data: AppData, wishlistIdValue: unknown, item
     const itemId = stringValue(itemIdValue, '', 120);
     const wishlist = (data.wishlists || []).find(list => list.id === wishlistId);
     if (!wishlist) throw new DomainError('Wishlist not found', 404);
-    if (!canManageWishlist(wishlist, actor)) throw new DomainError('You are not allowed to delete this wish', 403);
-    if (!wishlist.items.some(item => item.id === itemId)) throw new DomainError('Wish not found', 404);
+    const item = wishlist.items.find(candidate => candidate.id === itemId);
+    if (!item) throw new DomainError('Wish not found', 404);
+    if (!canManageWish(item, wishlist, actor)) throw new DomainError('You are not allowed to delete this wish', 403);
     return {
         ...data,
         wishlists: (data.wishlists || []).map(list => list.id === wishlistId
@@ -101,6 +107,7 @@ export const setWishlistReservation = (
     const wishlist = (data.wishlists || []).find(list => list.id === wishlistId);
     const item = wishlist?.items.find(candidate => candidate.id === itemId);
     if (!wishlist || !item) throw new DomainError('Wish not found', 404);
+    if (wishlist.visibility !== 'FAMILY') throw new DomainError('Only family wishes can be reserved', 403);
     if (item.ownerId === actor.id) throw new DomainError('Wish owners cannot inspect or change reservations', 403);
     if (reserved && item.reservedById && item.reservedById !== actor.id) {
         throw new DomainError('Wish is already reserved', 409);
@@ -137,16 +144,25 @@ export const filterWishlistsForActor = (wishlists: Wishlist[], actor: User) => w
 const canManageWishlist = (wishlist: Wishlist, actor: User) => (
     actor.role === 'OWNER' || actor.role === 'ADMIN' || wishlist.createdById === actor.id || wishlist.ownerId === actor.id
 );
+const canAddWish = (wishlist: Wishlist, actor: User) => wishlist.visibility === 'FAMILY' || canManageWishlist(wishlist, actor);
+const canManageWish = (item: WishlistItem, wishlist: Wishlist, actor: User) => (
+    actor.role === 'OWNER'
+    || actor.role === 'ADMIN'
+    || item.ownerId === actor.id
+    || item.createdById === actor.id
+    || (wishlist.visibility === 'PERSONAL' && canManageWishlist(wishlist, actor))
+);
 const optionalMemberId = (value: unknown, data: AppData) => typeof value === 'string' && data.members.some(member => member.id === value && member.isActive !== false) ? value : undefined;
 const stringValue = (value: unknown, fallback: string, max: number) => typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : fallback;
 const optionalString = (value: unknown, max: number) => stringValue(value, '', max) || undefined;
-const safeHttpsUrl = (value: unknown) => {
+const optionalHttpsUrl = (value: unknown) => {
     if (typeof value !== 'string' || !value.trim()) return undefined;
     try {
         const url = new URL(value);
-        return url.protocol === 'https:' ? url.toString() : undefined;
+        if (url.protocol !== 'https:') throw new DomainError('Wish URL must use HTTPS');
+        return url.toString();
     } catch {
-        return undefined;
+        throw new DomainError('Wish URL must be a valid HTTPS URL');
     }
 };
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);

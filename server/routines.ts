@@ -12,6 +12,7 @@ import type {
     RoutineSummary,
     RoutineTemplate
 } from '../routines.model.js';
+import { ROUTINE_PRESETS } from '../routine-presets.js';
 import { DomainError } from './domain.js';
 
 type Clock = () => number;
@@ -20,16 +21,6 @@ type IdFactory = () => string;
 const DAY_MS = 86_400_000;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
-
-const PRESETS: Record<RoutinePresetId, Pick<RoutineTemplate, 'title' | 'kind' | 'schedule' | 'unitLabel' | 'difficulty' | 'priority'>> = {
-    TRASH: { title: 'Вынести мусор', kind: 'ACCUMULATOR', unitLabel: 'пакет', difficulty: 'EASY', priority: 'MEDIUM' },
-    DISHWASHER: { title: 'Разобрать посудомойку', kind: 'ACCUMULATOR', unitLabel: 'загрузка', difficulty: 'EASY', priority: 'MEDIUM' },
-    PETS: { title: 'Позаботиться о питомцах', kind: 'SCHEDULED', schedule: { kind: 'DAILY' }, difficulty: 'EASY', priority: 'HIGH' },
-    CLEANING: { title: 'Уборка дома', kind: 'SCHEDULED', schedule: { kind: 'WEEKDAYS', weekDays: [6] }, difficulty: 'HARD', priority: 'MEDIUM' },
-    LAUNDRY: { title: 'Стирка', kind: 'ACCUMULATOR', unitLabel: 'загрузка', difficulty: 'MEDIUM', priority: 'MEDIUM' },
-    PLANTS: { title: 'Полить растения', kind: 'SCHEDULED', schedule: { kind: 'INTERVAL_DAYS', interval: 3 }, difficulty: 'EASY', priority: 'LOW' },
-    GROCERIES: { title: 'Закупить продукты', kind: 'SCHEDULED', schedule: { kind: 'WEEKDAYS', weekDays: [6] }, difficulty: 'MEDIUM', priority: 'HIGH' }
-};
 
 export const dateInTimezone = (timestamp: number, timezone: string) => {
     try {
@@ -158,7 +149,7 @@ const normalizeTemplate = (
     if (previous && !canManageRoutine(actor, previous)) {
         throw new DomainError('You are not allowed to edit this routine', 403);
     }
-    const preset = typeof raw.presetId === 'string' ? PRESETS[raw.presetId as RoutinePresetId] : undefined;
+    const preset = typeof raw.presetId === 'string' ? ROUTINE_PRESETS[raw.presetId as RoutinePresetId] : undefined;
     const familyTimezone = data.family?.settings.timezone || 'UTC';
     const timezone = normalizeTimezone(raw.timezone, previous?.timezone || familyTimezone);
     const today = dateInTimezone(now, timezone);
@@ -168,7 +159,7 @@ const normalizeTemplate = (
         ? raw.kind
         : preset?.kind || previous?.kind || 'SCHEDULED';
     const startDate = dateValue(raw.startDate) || previous?.startDate || today;
-    const endDate = dateValue(raw.endDate) || previous?.endDate;
+    const endDate = Object.hasOwn(raw, 'endDate') ? dateValue(raw.endDate) : previous?.endDate;
     if (endDate && endDate < startDate) throw new DomainError('Routine end date precedes its start date');
     const activeMemberIds = new Set(data.members.filter(member => member.isActive !== false).map(member => member.id));
     const assigneeIds = Array.isArray(raw.assigneeIds)
@@ -187,8 +178,8 @@ const normalizeTemplate = (
         ? normalizeSchedule(raw.schedule, preset?.schedule || previous?.schedule)
         : undefined;
     const scheduleChanged = !previous
-        || raw.schedule !== undefined
-        || raw.startDate !== undefined
+        || JSON.stringify(schedule) !== JSON.stringify(previous.schedule)
+        || startDate !== previous.startDate
         || kind !== previous.kind;
     const candidateOccurrence = kind === 'SCHEDULED' && schedule
         ? !scheduleChanged && previous?.openTaskId && previous.nextOccurrenceDate
@@ -201,7 +192,7 @@ const normalizeTemplate = (
     return {
         id: previous?.id || rawId || `routine-${idFactory()}`,
         title,
-        description: optionalString(raw.description, 2000) || previous?.description,
+        description: Object.hasOwn(raw, 'description') ? optionalString(raw.description, 2000) : previous?.description,
         kind,
         schedule,
         assignmentMode,
@@ -213,13 +204,17 @@ const normalizeTemplate = (
         ownerId: visibility === 'PERSONAL' ? previous?.ownerId || actor.id : undefined,
         startDate,
         endDate,
-        time: typeof raw.time === 'string' && TIME_PATTERN.test(raw.time) ? raw.time : previous?.time,
+        time: Object.hasOwn(raw, 'time')
+            ? typeof raw.time === 'string' && TIME_PATTERN.test(raw.time) ? raw.time : undefined
+            : previous?.time,
         timezone,
         paused: typeof raw.paused === 'boolean' ? raw.paused : previous?.paused || false,
         nextOccurrenceDate,
         openTaskId: previous?.openTaskId,
         accumulatedUnits: previous?.accumulatedUnits || 0,
-        unitLabel: optionalString(raw.unitLabel, 40) || preset?.unitLabel || previous?.unitLabel,
+        unitLabel: kind === 'ACCUMULATOR'
+            ? optionalString(raw.unitLabel, 40) || preset?.unitLabel || previous?.unitLabel || 'ед.'
+            : undefined,
         streak: previous?.streak || 0,
         createdById: previous?.createdById || actor.id,
         createdAt: previous?.createdAt || now,
@@ -598,6 +593,29 @@ export const summarizeRoutines = (data: AppData, now = Date.now()): RoutineSumma
             state: red > 0 || score < 60 ? 'RED' : amber > 0 || score < 85 ? 'AMBER' : 'GREEN',
             items
         }
+    };
+};
+
+export const summarizeRoutineScopes = (
+    data: AppData,
+    actorId: string,
+    now = Date.now()
+): Record<'PERSONAL' | 'FAMILY', RoutineSummary> => {
+    const summarizeScope = (visibility: 'PERSONAL' | 'FAMILY') => {
+        const routines = (data.routines || []).filter(routine => (
+            routine.visibility === visibility
+            && (visibility === 'FAMILY' || routine.ownerId === actorId)
+        ));
+        const routineIds = new Set(routines.map(routine => routine.id));
+        return summarizeRoutines({
+            ...data,
+            routines,
+            routineEvents: (data.routineEvents || []).filter(event => routineIds.has(event.routineId))
+        }, now);
+    };
+    return {
+        PERSONAL: summarizeScope('PERSONAL'),
+        FAMILY: summarizeScope('FAMILY')
     };
 };
 

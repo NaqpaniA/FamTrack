@@ -66,15 +66,20 @@ export const SegmentedControl = <T extends string>({
   </div>
 );
 
-export const FloatingActionButton = ({ onClick, icon: Icon, label }: { onClick: () => void, icon: IconComponent, label: string }) => (
+export const FloatingActionButton = ({ onClick, icon: Icon, label, visibleLabel }: { onClick: () => void, icon: IconComponent, label: string, visibleLabel?: string }) => (
   <button
+    type="button"
     onClick={onClick}
     aria-label={label}
     title={label}
-    className="fixed right-4 z-40 w-12 h-12 rounded-2xl bg-black text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform"
-    style={{ bottom: 'calc(var(--bottom-nav-height) + 14px + var(--app-safe-bottom))' }}
+    className={`fixed z-40 min-h-11 rounded-2xl bg-black text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform ${visibleLabel ? 'gap-1.5 px-4' : 'h-12 w-12'}`}
+    style={{
+      right: 'calc(14px + var(--app-safe-right))',
+      bottom: 'calc(var(--bottom-nav-height) + 14px + var(--app-safe-bottom))'
+    }}
   >
     <Icon size={22} />
+    {visibleLabel ? <span className="text-sm font-black">{visibleLabel}</span> : null}
   </button>
 );
 

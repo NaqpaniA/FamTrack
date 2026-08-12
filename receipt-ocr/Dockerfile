@@ -16,7 +16,7 @@ RUN apt-get update \
 COPY receipt-ocr/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --index-url https://pypi.org/simple -r requirements.txt
 
-COPY receipt-ocr/app.py ./app.py
+COPY receipt-ocr/app.py receipt-ocr/smoke.py ./
 
 RUN useradd --create-home --uid 10001 ocr && chown -R ocr:ocr /app
 USER ocr

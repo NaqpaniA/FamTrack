@@ -7,12 +7,37 @@ import { ShoppingItem } from './shopping.model';
 import { AppEvent } from './events.model';
 import { Note, NoteScope, NoteContentType, NoteChecklistItem } from './notes.model';
 import { FamilySettings } from './settings.model';
-import { RoutineEvent, RoutineSummary, RoutineTemplate } from './routines.model';
+import { RoutineEvent, RoutineSummary, RoutineTemplate, RoutineVisibility } from './routines.model';
 import { PantryData } from './pantry.model';
 import { Wishlist } from './wishlist.model';
 import { PurchaseImportJob } from './purchase-import.model';
 
 export type Tab = 'DASHBOARD' | 'TASKS' | 'FINANCE' | 'FAMILY' | 'SHOP';
+
+export const DASHBOARD_WIDGET_IDS = [
+  'routines',
+  'day-pulse',
+  'house-health',
+  'history',
+  'leaderboard',
+  'projects',
+  'activity',
+  'notes',
+  'weather',
+  'wishlists'
+] as const;
+
+export type DashboardWidgetId = typeof DASHBOARD_WIDGET_IDS[number];
+
+export const DEFAULT_DASHBOARD_HIDDEN_WIDGETS: DashboardWidgetId[] = [
+  'history',
+  'leaderboard',
+  'projects',
+  'activity',
+  'notes',
+  'weather',
+  'wishlists'
+];
 
 export interface Family {
   id: string;
@@ -86,6 +111,7 @@ export interface AppData {
   routines?: RoutineTemplate[];
   routineEvents?: RoutineEvent[];
   routineSummary?: RoutineSummary;
+  routineSummaries?: Record<RoutineVisibility, RoutineSummary>;
   pantry?: PantryData;
   wishlists?: Wishlist[];
   dashboardPreferences?: DashboardPreferences;
@@ -96,8 +122,8 @@ export interface AppData {
 export interface DashboardPreferences {
   userId: string;
   scope: 'PERSONAL' | 'FAMILY';
-  hiddenWidgets: string[];
-  widgetOrder: string[];
+  hiddenWidgets: DashboardWidgetId[];
+  widgetOrder: DashboardWidgetId[];
   weatherOptIn: boolean;
 }
 

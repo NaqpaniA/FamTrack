@@ -1,0 +1,64 @@
+@startuml
+!pragma teoz true
+!include _style_seq.puml
+
+autonumber
+title
+    $B("POST /api/routines/pause")
+    $SM($MUTED("Pause or resume one routine while preserving one open occurrence"))
+end title
+footer $SM($MUTED("RoutineTemplate.paused + Task WAITING/TODO / mutationId idempotency"))
+
+box "User / Telegram Mini App" $L_USER
+    actor "Family member" as actor
+    boundary "Routine controls" as ui <<p_chg>>
+end box
+box "FamTrack API" $L_API
+    boundary "Command endpoint" as api <<p_chg>>
+end box
+box "Routine domain" $L_CORE
+    control "Routine service" as routine <<p_chg>>
+end box
+box "State" $L_DATA
+    database "SQLite aggregate + receipts" as db <<p_chg>>
+end box
+
+activate actor
+actor -[$C_CHG]> ui : tap pause/resume(routineId)
+activate ui
+ui -[$C_CHG]> ui : disable all controls for routineId
+ui -[$C_CHG]> api : POST /api/routines/pause\n{revision, mutationId, routineId, paused}
+activate api
+api -[$C_CHG]> db : find receipt + load template/open task
+activate db
+db --[$C_CHG]> api : duplicate | template/task | notFound
+deactivate db
+
+break#$FR_CRIT_HEAD #$FR_CRIT_BG notFound OR actor cannot manage template
+    api --[$C_CHG]> ui : 404 ROUTINE_NOT_FOUND | 403 FORBIDDEN
+    ui --[$C_CHG]> actor : re-enable controls and show error
+end
+
+alt#$FR_INFO_HEAD #$FR_INFO_BG exact duplicate
+    api -[$C_CHG]> api : reuse receipt; no second event
+else #$FR_INFO_BG new command
+    api -[$C_CHG]> routine : pauseRoutine(routineId, paused, actor): PauseDecision
+    activate routine
+    routine -[$C_CHG]> routine : template.paused = paused;\nopen task status = WAITING or TODO
+    routine --[$C_CHG]> api : PAUSED/RESUMED event + changed rows
+    deactivate routine
+    api -[$C_CHG]> db : atomic template/task/event/receipt/revision write
+    activate db
+    db --[$C_CHG]> api : committed AppData
+    deactivate db
+end
+
+api --[$C_CHG]> ui : 200 authoritative routine/task state
+deactivate api
+ui -[$C_CHG]> ui : re-enable controls for routineId
+ui --[$C_CHG]> actor : show paused/resumed feedback
+deactivate ui
+deactivate actor
+
+SEQ_LEGEND_STATUS()
+@enduml

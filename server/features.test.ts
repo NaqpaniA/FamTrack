@@ -23,12 +23,16 @@ test('disabled capabilities do not expose release collections', () => {
         ...INITIAL_DATA,
         routines: [{ id: 'hidden' }] as never,
         routineEvents: [{ id: 'hidden-event' }] as never,
+        routineSummary: { dueToday: 1 } as never,
+        routineSummaries: { PERSONAL: { dueToday: 1 }, FAMILY: { dueToday: 1 } } as never,
         wishlists: [{ id: 'hidden-list' }] as never,
         pantry: { products: [{ id: 'hidden-product' }], recentMovements: [], totalProducts: 1, lowStockCount: 0 } as never
     };
     const result = applyCapabilities(data, readFeatureCapabilities({} as NodeJS.ProcessEnv));
     assert.deepEqual(result.routines, []);
     assert.deepEqual(result.routineEvents, []);
+    assert.equal(result.routineSummary, undefined);
+    assert.equal(result.routineSummaries, undefined);
     assert.deepEqual(result.wishlists, []);
     assert.equal(result.pantry, undefined);
 });

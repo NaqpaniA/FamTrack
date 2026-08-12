@@ -2,7 +2,7 @@ import type { AppData } from '../types.js';
 import type { User } from '../family.model.js';
 import type { Note } from '../notes.model.js';
 import { filterWishlistsForActor } from './wishlists.js';
-import { summarizeRoutines } from './routines.js';
+import { summarizeRoutines, summarizeRoutineScopes } from './routines.js';
 
 export class ForbiddenError extends Error {
     status = 403;
@@ -44,6 +44,11 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
         routines: visibleRoutines,
         routineEvents: visibleRoutineEvents
     });
+    const visibleRoutineSummaries = summarizeRoutineScopes({
+        ...data,
+        routines: visibleRoutines,
+        routineEvents: visibleRoutineEvents
+    }, actor.id);
 
     if (isOwner(actor)) {
         return {
@@ -56,6 +61,7 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
             routines: visibleRoutines,
             routineEvents: visibleRoutineEvents,
             routineSummary: visibleRoutineSummary,
+            routineSummaries: visibleRoutineSummaries,
             wishlists: visibleWishlists
         };
     }
@@ -88,6 +94,7 @@ export const filterForActor = (data: AppData, actor: User): AppData => {
         routines: visibleRoutines,
         routineEvents: visibleRoutineEvents,
         routineSummary: visibleRoutineSummary,
+        routineSummaries: visibleRoutineSummaries,
         wishlists: visibleWishlists
     };
 };

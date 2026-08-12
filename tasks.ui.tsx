@@ -17,7 +17,8 @@ import {
   X as XIcon,
   List as ListIcon,
   Kanban,
-  Sparkles
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 import {
   Task,
@@ -72,8 +73,9 @@ export const TaskItem: React.FC<{
   epic?: Epic,
   onClick: (task: Task) => void,
   onStatusChange?: (status: TaskStatus) => void,
-  onRoutineComplete?: () => void
-}> = ({ task, assignee, epic, onClick, onStatusChange, onRoutineComplete }) => {
+  onRoutineComplete?: () => void,
+  routinePending?: boolean
+}> = ({ task, assignee, epic, onClick, onStatusChange, onRoutineComplete, routinePending = false }) => {
   const completedSub = task.subtasks.filter(s => s.isCompleted).length;
   const totalSub = task.subtasks.length;
   const priorityConfig = PRIORITIES[task.priority] || PRIORITIES.LOW;
@@ -100,10 +102,11 @@ export const TaskItem: React.FC<{
           ? onRoutineComplete ? `Завершить рутину «${task.title}»` : `Рутина «${task.title}» управляется на главной`
           : task.status === 'DONE' ? `Вернуть задачу «${task.title}»` : `Завершить задачу «${task.title}»`}
         title={isRoutineTask ? 'Завершить рутину' : task.status === 'DONE' ? 'Вернуть в работу' : 'Завершить'}
-        disabled={isRoutineTask && !onRoutineComplete}
+        disabled={(isRoutineTask && !onRoutineComplete) || routinePending}
+        aria-busy={routinePending || undefined}
         className={`mt-1 transition-colors active:scale-90 transform disabled:cursor-default ${task.status === 'DONE' ? 'text-green-500' : isRoutineTask ? onRoutineComplete ? 'text-blue-500' : 'text-blue-300' : 'text-gray-300 hover:text-gray-400'}`}
       >
-        {task.status === 'DONE' ? <CheckCircle2 size={24} className="fill-green-50" /> : <Circle size={24} />}
+        {routinePending ? <Loader2 size={24} className="animate-spin text-blue-500" /> : task.status === 'DONE' ? <CheckCircle2 size={24} className="fill-green-50" /> : <Circle size={24} />}
       </button>
       <button type="button" className="flex-1 cursor-pointer select-none text-left" onClick={() => onClick(task)}>
         <div className="flex items-center gap-2 mb-1">
@@ -242,7 +245,7 @@ export const KanbanCard: React.FC<{
 
 // --- Editors ---
 
-export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, onRoutineComplete?: (routineId: string, taskId: string) => void, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
+export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routinePending = false, members, epics, availableTasks, currentUser }: { key?: React.Key, task: Task | null, onSave: (t: Task) => void, onDelete: (id: string) => void, onRoutineComplete?: (routineId: string, taskId: string) => void, routinePending?: boolean, members: User[], epics: Epic[], availableTasks: Task[], currentUser: User }) => {
   const [title, setTitle] = useState(task?.title || '');
   const [description, setDescription] = useState(task?.description || '');
   const [priority, setPriority] = useState<Priority>(task?.priority || 'MEDIUM');
@@ -594,8 +597,8 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, members,
               </button>
           )}
           {isRoutineTask && task?.routineTemplateId && onRoutineComplete ? (
-              <button type="button" onClick={() => onRoutineComplete(task.routineTemplateId!, task.id)} className="flex-1 rounded-xl bg-blue-600 py-3 font-bold text-white shadow-lg transition-transform active:scale-95">
-                  Выполнить рутину
+              <button type="button" disabled={routinePending} aria-busy={routinePending || undefined} onClick={() => onRoutineComplete(task.routineTemplateId!, task.id)} className="flex-1 rounded-xl bg-blue-600 py-3 font-bold text-white shadow-lg transition-transform active:scale-95 disabled:opacity-45">
+                  {routinePending ? <span className="inline-flex items-center gap-2"><Loader2 size={17} className="animate-spin" /> Выполняю…</span> : 'Выполнить рутину'}
               </button>
           ) : (
               <button type="button" onClick={handleSave} disabled={isRoutineTask} className="flex-1 bg-black text-white rounded-xl py-3 font-bold shadow-lg active:scale-95 transition-transform disabled:opacity-40">
@@ -729,6 +732,7 @@ export const TasksScreen = ({
     onAddTask,
     onStatusChange,
     onRoutineComplete,
+    pendingRoutineIds,
     onMoveTask,
     onAddEpic,
     onEditEpic,
@@ -740,6 +744,7 @@ export const TasksScreen = ({
     onAddTask: () => void,
     onStatusChange: (id: string, status: TaskStatus) => void,
     onRoutineComplete: (routineId: string, taskId: string) => void,
+    pendingRoutineIds?: ReadonlySet<string>,
     onMoveTask: (id: string, status: TaskStatus, beforeTaskId?: string) => void,
     onAddEpic: () => void,
     onEditEpic: (epic: Epic) => void,
@@ -911,6 +916,7 @@ export const TasksScreen = ({
                                         onClick={onTaskClick}
                                         onStatusChange={(s) => onStatusChange(task.id, s)}
                                         onRoutineComplete={task.routineTemplateId ? () => onRoutineComplete(task.routineTemplateId!, task.id) : undefined}
+                                        routinePending={!!task.routineTemplateId && pendingRoutineIds?.has(task.routineTemplateId)}
                                     />
                                 </div>
                             ))
@@ -955,7 +961,7 @@ export const TasksScreen = ({
                 )}
             </div>
 
-            <FloatingActionButton onClick={onAddTask} icon={Plus} label="Добавить задачу" />
+            <FloatingActionButton onClick={onAddTask} icon={Plus} label="Добавить задачу" visibleLabel="Задача" />
         </Screen>
     )
 }

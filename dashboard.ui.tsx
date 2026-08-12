@@ -145,6 +145,7 @@ export const DashboardScreen = ({
     onTaskClick, 
     onTaskStatusChange,
     onNavigate,
+    onAddTask,
     onAddEpic,
     onOpenProfile,
     onOpenNotes,
@@ -155,6 +156,7 @@ export const DashboardScreen = ({
     onTaskClick: (t: Task) => void,
     onTaskStatusChange: (id: string, status: Task['status']) => void,
     onNavigate: (tab: Tab, epicId?: string) => void,
+    onAddTask: () => void,
     onAddEpic: () => void,
     onOpenProfile: () => void,
     onOpenNotes: () => void,
@@ -165,6 +167,7 @@ export const DashboardScreen = ({
         completeRoutine: (routineId: string, taskId?: string, units?: number) => void;
         recordRoutineUnit: (routineId: string, units?: number) => void;
         skipRoutine: (routineId: string) => void;
+        pendingRoutineIds?: ReadonlySet<string>;
         savePreferences: (preferences: Partial<DashboardPreferences>) => void;
         saveWishlist: (wishlist: Partial<Wishlist>) => void;
         saveWishlistItem: (item: Partial<WishlistItem> & { wishlistId: string }) => void;
@@ -211,56 +214,30 @@ export const DashboardScreen = ({
                  <Avatar user={data.currentUser} size="lg" onClick={onOpenProfile} />
             </div>
 
-            {/* Summary Cards */}
-            <div className="grid grid-cols-3 gap-2.5">
-                <button type="button" className="bg-blue-50 p-3 rounded-[14px] border border-blue-100/70 flex flex-col text-left justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('FINANCE')}>
-                    <div className="p-1.5 bg-white w-min rounded-[10px] text-blue-600 shadow-sm">
-                        <Wallet size={18} />
-                    </div>
-                    <div>
-                        <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mb-0.5">Баланс</div>
-                        <div className="text-[13px] font-bold truncate">{formatMoney(totalBalance).replace(',00 ₽', '')}</div>
-                    </div>
+            {/* Compact summary keeps the agenda above the fold on narrow Telegram screens. */}
+            <Panel className="grid grid-cols-3 divide-x divide-black/5 p-1">
+                <button type="button" className="flex min-h-12 items-center gap-2 rounded-xl px-2 text-left active:bg-blue-50" onClick={() => onNavigate('FINANCE')}>
+                    <Wallet size={16} className="shrink-0 text-blue-600" />
+                    <span className="min-w-0"><span className="block text-[9px] font-bold uppercase text-gray-400">Баланс</span><span className="block truncate text-xs font-black">{formatMoney(totalBalance).replace(',00 ₽', '')}</span></span>
                 </button>
-                <button type="button" className="bg-orange-50 p-3 rounded-[14px] border border-orange-100/70 flex flex-col text-left justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('TASKS')}>
-                    <div className="p-1.5 bg-white w-min rounded-[10px] text-orange-600 shadow-sm">
-                        <CheckSquare size={18} />
-                    </div>
-                    <div>
-                        <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mb-0.5">К Делу</div>
-                        <div className="text-[13px] font-bold">{activeTasksCount} задач</div>
-                    </div>
+                <button type="button" className="flex min-h-12 items-center gap-2 rounded-xl px-2 text-left active:bg-orange-50" onClick={() => onNavigate('TASKS')}>
+                    <CheckSquare size={16} className="shrink-0 text-orange-600" />
+                    <span className="min-w-0"><span className="block text-[9px] font-bold uppercase text-gray-400">К делу</span><span className="block truncate text-xs font-black">{activeTasksCount} задач</span></span>
                 </button>
-                <button type="button" className="bg-yellow-50 p-3 rounded-[14px] border border-yellow-100/70 flex flex-col text-left justify-between h-24 cursor-pointer active:scale-95 transition-transform" onClick={() => onNavigate('FAMILY')}>
-                    <div className="p-1.5 bg-white w-min rounded-[10px] text-yellow-600 shadow-sm">
-                        <Trophy size={18} />
-                    </div>
-                    <div>
-                        <div className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mb-0.5">Уровень {data.currentUser.level}</div>
-                        <div className="text-[13px] font-bold">{data.currentUser.xp} XP</div>
-                    </div>
+                <button type="button" className="flex min-h-12 items-center gap-2 rounded-xl px-2 text-left active:bg-yellow-50" onClick={() => onNavigate('FAMILY')}>
+                    <Trophy size={16} className="shrink-0 text-yellow-600" />
+                    <span className="min-w-0"><span className="block text-[9px] font-bold uppercase text-gray-400">Ур. {data.currentUser.level}</span><span className="block truncate text-xs font-black">{data.currentUser.xp} XP</span></span>
                 </button>
-            </div>
+            </Panel>
 
-            {householdEnabled ? (
-                <React.Suspense fallback={<div className="h-32 animate-pulse rounded-[20px] bg-black/5" aria-label="Загружаю Household Pulse" />}>
-                    <HouseholdDashboard
-                        data={data}
-                        actions={householdActions}
-                        externalWidgets={{ notes: notesWidget, projects: projectsWidget, activity: activityWidget }}
-                    />
-                </React.Suspense>
-            ) : null}
-
-            {!householdEnabled ? notesWidget : null}
-
-            {!householdEnabled ? projectsWidget : null}
-
-             {/* Today Tasks */}
-             <div>
+            {/* Today Tasks */}
+            <div>
                 <SectionHeader
                     title="На повестке"
-                    action={<button type="button" onClick={() => onNavigate('TASKS')} className="text-sm font-medium text-blue-600">Все</button>}
+                    action={<div className="flex items-center gap-3">
+                        <button type="button" onClick={onAddTask} className="inline-flex min-h-9 items-center gap-1 rounded-full bg-blue-50 px-3 text-xs font-black text-blue-700"><Plus size={14} /> Задача</button>
+                        <button type="button" onClick={() => onNavigate('TASKS')} className="text-sm font-medium text-blue-600">Все</button>
+                    </div>}
                 />
                 <Panel className="mt-2 overflow-hidden">
                     {agendaTasks.length === 0 ? (
@@ -278,6 +255,7 @@ export const DashboardScreen = ({
                                       onClick={onTaskClick}
                                       onStatusChange={(status) => onTaskStatusChange(task.id, status)}
                                       onRoutineComplete={task.routineTemplateId ? () => householdActions.completeRoutine(task.routineTemplateId!, task.id) : undefined}
+                                      routinePending={!!task.routineTemplateId && householdActions.pendingRoutineIds?.has(task.routineTemplateId)}
                                    />
                                </div>
                            ))
@@ -289,6 +267,20 @@ export const DashboardScreen = ({
                     ) : null}
                 </Panel>
             </div>
+
+            {householdEnabled ? (
+                <React.Suspense fallback={<div className="h-32 animate-pulse rounded-[20px] bg-black/5" aria-label="Загружаю Household Pulse" />}>
+                    <HouseholdDashboard
+                        data={data}
+                        actions={householdActions}
+                        externalWidgets={{ notes: notesWidget, projects: projectsWidget, activity: activityWidget }}
+                    />
+                </React.Suspense>
+            ) : null}
+
+            {!householdEnabled ? notesWidget : null}
+
+            {!householdEnabled ? projectsWidget : null}
 
             {!householdEnabled ? activityWidget : null}
         </Screen>

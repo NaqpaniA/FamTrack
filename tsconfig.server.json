@@ -25,6 +25,8 @@
     "events.model.ts",
     "notes.model.ts",
     "outbox.ts",
+    "routine-presets.ts",
+    "routines.model.ts",
     "barcode.ts"
   ]
 }

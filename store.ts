@@ -10,6 +10,7 @@ import { TWA, generateId } from './utils';
 import { useFamilyData, useMutations } from './queries';
 import type { RoutineTemplate } from './routines.model';
 import type { Wishlist, WishlistItem } from './wishlist.model';
+import { useRoutineActionGuard } from './routine-action-guard';
 
 const EMPTY_DATA: AppData = {
   currentUser: {
@@ -46,6 +47,7 @@ export const useAppStore = () => {
   const isLoading = !familyQuery.data && familyQuery.isPending;
   const isError = !familyQuery.data && familyQuery.isError;
   const mutations = useMutations();
+  const routineActions = useRoutineActionGuard();
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [bonusData, setBonusData] = useState<{ streak: number, xp: number } | null>(null);
@@ -370,41 +372,66 @@ export const useAppStore = () => {
       addToast(error instanceof Error ? error.message : fallback, 'ERROR')
   );
 
-  const saveRoutine = (routine: Partial<RoutineTemplate> & { presetId?: string }) => {
-      mutations.saveRoutine.mutate(routine, {
-          onSuccess: () => addToast('Рутина сохранена', 'SUCCESS'),
-          onError: mutationError('Не удалось сохранить рутину')
-      });
-      TWA.haptic('light');
+  const saveRoutine = async (routine: Partial<RoutineTemplate> & { presetId?: string }) => {
+      try {
+          await mutations.saveRoutine.mutateAsync(routine);
+          addToast('Рутина сохранена', 'SUCCESS');
+          TWA.haptic('light');
+          return true;
+      } catch (error) {
+          mutationError('Не удалось сохранить рутину')(error);
+          return false;
+      }
   };
 
-  const pauseRoutine = (routineId: string, paused: boolean) => {
-      mutations.pauseRoutine.mutate({ routineId, paused }, {
-          onSuccess: () => addToast(paused ? 'Рутина приостановлена' : 'Рутина возобновлена', 'SUCCESS'),
-          onError: mutationError('Не удалось изменить рутину')
-      });
+  const pauseRoutine = async (routineId: string, paused: boolean) => {
+      try {
+          const result = await routineActions.run(routineId, () => mutations.pauseRoutine.mutateAsync({ routineId, paused }));
+          if (!result) return false;
+          addToast(paused ? 'Рутина приостановлена' : 'Рутина возобновлена', 'SUCCESS');
+          return true;
+      } catch (error) {
+          mutationError('Не удалось изменить рутину')(error);
+          return false;
+      }
   };
 
-  const completeRoutine = (routineId: string, taskId?: string, units?: number) => {
-      mutations.completeRoutine.mutate({ routineId, taskId, units }, {
-          onSuccess: () => addToast('Выполнение учтено · XP начислен', 'SUCCESS'),
-          onError: mutationError('Не удалось завершить рутину')
-      });
-      TWA.notification('success');
+  const completeRoutine = async (routineId: string, taskId?: string, units?: number) => {
+      try {
+          const result = await routineActions.run(routineId, () => mutations.completeRoutine.mutateAsync({ routineId, taskId, units }));
+          if (!result) return false;
+          addToast('Выполнение учтено · XP начислен', 'SUCCESS');
+          TWA.notification('success');
+          return true;
+      } catch (error) {
+          mutationError('Не удалось завершить рутину')(error);
+          return false;
+      }
   };
 
-  const recordRoutineUnit = (routineId: string, units = 1) => {
-      mutations.recordRoutineUnit.mutate({ routineId, units }, {
-          onError: mutationError('Не удалось добавить единицу')
-      });
-      TWA.selection();
+  const recordRoutineUnit = async (routineId: string, units = 1) => {
+      try {
+          const result = await routineActions.run(routineId, () => mutations.recordRoutineUnit.mutateAsync({ routineId, units }));
+          if (!result) return false;
+          addToast(`+${units} учтено`, 'INFO');
+          TWA.selection();
+          return true;
+      } catch (error) {
+          mutationError('Не удалось добавить единицу')(error);
+          return false;
+      }
   };
 
-  const skipRoutine = (routineId: string) => {
-      mutations.skipRoutine.mutate(routineId, {
-          onSuccess: () => addToast('Период пропущен без XP', 'INFO'),
-          onError: mutationError('Не удалось пропустить выполнение')
-      });
+  const skipRoutine = async (routineId: string) => {
+      try {
+          const result = await routineActions.run(routineId, () => mutations.skipRoutine.mutateAsync(routineId));
+          if (!result) return false;
+          addToast('Период пропущен без XP', 'INFO');
+          return true;
+      } catch (error) {
+          mutationError('Не удалось пропустить выполнение')(error);
+          return false;
+      }
   };
 
   const saveDashboardPreferences = (preferences: Partial<DashboardPreferences>) => {
@@ -413,26 +440,46 @@ export const useAppStore = () => {
       });
   };
 
-  const saveWishlist = (wishlist: Partial<Wishlist>) => {
-      mutations.saveWishlist.mutate(wishlist, { onError: mutationError('Не удалось сохранить список желаний') });
+  const saveWishlist = async (wishlist: Partial<Wishlist>) => {
+      try {
+          await mutations.saveWishlist.mutateAsync(wishlist);
+          return true;
+      } catch (error) {
+          mutationError('Не удалось сохранить список желаний')(error);
+          return false;
+      }
   };
 
-  const saveWishlistItem = (item: Partial<WishlistItem> & { wishlistId: string }) => {
-      mutations.saveWishlistItem.mutate(item, {
-          onSuccess: () => addToast('Желание сохранено', 'SUCCESS'),
-          onError: mutationError('Не удалось сохранить желание')
-      });
+  const saveWishlistItem = async (item: Partial<WishlistItem> & { wishlistId: string }) => {
+      try {
+          await mutations.saveWishlistItem.mutateAsync(item);
+          addToast('Желание сохранено', 'SUCCESS');
+          return true;
+      } catch (error) {
+          mutationError('Не удалось сохранить желание')(error);
+          return false;
+      }
   };
 
-  const deleteWishlistItem = (wishlistId: string, itemId: string) => {
-      mutations.deleteWishlistItem.mutate({ wishlistId, itemId }, { onError: mutationError('Не удалось удалить желание') });
+  const deleteWishlistItem = async (wishlistId: string, itemId: string) => {
+      try {
+          await mutations.deleteWishlistItem.mutateAsync({ wishlistId, itemId });
+          return true;
+      } catch (error) {
+          mutationError('Не удалось удалить желание')(error);
+          return false;
+      }
   };
 
-  const reserveWishlistItem = (wishlistId: string, itemId: string, reserved: boolean) => {
-      mutations.reserveWishlistItem.mutate({ wishlistId, itemId, reserved }, {
-          onSuccess: () => addToast(reserved ? 'Подарок забронирован' : 'Бронь снята', 'SUCCESS'),
-          onError: mutationError('Не удалось изменить бронь')
-      });
+  const reserveWishlistItem = async (wishlistId: string, itemId: string, reserved: boolean) => {
+      try {
+          await mutations.reserveWishlistItem.mutateAsync({ wishlistId, itemId, reserved });
+          addToast(reserved ? 'Подарок забронирован' : 'Бронь снята', 'SUCCESS');
+          return true;
+      } catch (error) {
+          mutationError('Не удалось изменить бронь')(error);
+          return false;
+      }
   };
 
   const adjustPantry = (input: Parameters<typeof mutations.adjustPantry.mutate>[0]) => {
@@ -469,7 +516,7 @@ export const useAppStore = () => {
         consumeItem
       },
       shopping: { addItem: addShoppingItem, toggle: toggleShoppingItem, delete: deleteShoppingItem, checkout: checkoutShoppingList },
-      routines: { save: saveRoutine, pause: pauseRoutine, complete: completeRoutine, recordUnit: recordRoutineUnit, skip: skipRoutine, savePreferences: saveDashboardPreferences },
+      routines: { save: saveRoutine, pause: pauseRoutine, complete: completeRoutine, recordUnit: recordRoutineUnit, skip: skipRoutine, savePreferences: saveDashboardPreferences, pendingIds: routineActions.pendingRoutineIds },
       wishlists: { save: saveWishlist, saveItem: saveWishlistItem, deleteItem: deleteWishlistItem, reserve: reserveWishlistItem },
       pantry: { adjust: adjustPantry }
     }
