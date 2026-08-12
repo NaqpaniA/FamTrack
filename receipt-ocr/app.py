@@ -24,9 +24,9 @@ def get_engine() -> PaddleOCR:
     if engine is None:
         engine = PaddleOCR(
             lang=os.getenv("PADDLEOCR_LANG", "ru"),
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
+            use_angle_cls=False,
+            show_log=False,
+            use_gpu=False,
         )
     return engine
 
@@ -99,7 +99,7 @@ async def ocr(file: UploadFile = File(...)) -> dict[str, Any]:
     prepared = preprocess(image)
     async with semaphore:
         try:
-            prediction = await asyncio.to_thread(get_engine().predict, prepared)
+            prediction = await asyncio.to_thread(get_engine().ocr, prepared, cls=False)
             blocks = normalize_result(prediction)
         except Exception as exc:  # Keep provider details inside the sidecar.
             raise HTTPException(status_code=503, detail="OCR inference failed") from exc

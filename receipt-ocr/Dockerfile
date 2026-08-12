@@ -14,12 +14,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY receipt-ocr/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --index-url https://pypi.org/simple -r requirements.txt
+RUN pip install --no-cache-dir --index-url https://pypi.org/simple -r requirements.txt \
+    && pip check
 
 COPY receipt-ocr/app.py receipt-ocr/smoke.py ./
 
 RUN useradd --create-home --uid 10001 ocr && chown -R ocr:ocr /app
 USER ocr
+
+# Bake the Russian detector/recognizer models into the image. This also makes
+# an unsupported CPU fail during the candidate build instead of on a receipt.
+RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='ru', use_angle_cls=False, show_log=False, use_gpu=False)"
 
 EXPOSE 8090
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8090", "--workers", "1", "--no-access-log"]
