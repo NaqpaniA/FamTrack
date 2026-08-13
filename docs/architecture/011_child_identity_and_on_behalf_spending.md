@@ -1,19 +1,25 @@
 # ADR 011: Идентичность ребёнка без Telegram и траты XP от его имени
 
-**Статус:** ПРИНЯТО
-**Дата:** 2026-08-12
+**Статус:** ПРИНЯТО; реализация Phase A — тикеты 111–113 (`docs/backlog/README.md`, волна 2)
+**Дата:** 2026-08-12 (актуализация 2026-08-13 по итогам board review)
 **Владение:** rewards, inventory, family members, invites, RBAC
+**Связанные ADR:** [ADR 013](013_modular_monolith.md) — целевое размещение authorization-кода (policy-слой)
+
+Глоссарий: «owner» в этом ADR — поле `InventoryItem.ownerId` (владелец
+предмета = beneficiary), не путать с ролью семьи `OWNER`.
 
 ## 1. Решение
 
 Ребёнок без Telegram-аккаунта — полноценный участник экономики семьи. Петля
 «заработал → потратил» замыкается через родителя (Phase A, реализуется сейчас):
 
-1. `POST /api/rewards/purchase` и `POST /api/rewards/use` принимают
-   опциональный `targetUserId`. Без него поведение не меняется (actor платит
-   сам). С ним команда исполняется **от имени beneficiary**: XP списывается у
-   него, предмет попадает в его инвентарь, а действующий родитель остаётся в
-   audit trail (event.actorId, пометка в RewardLog).
+1. `POST /api/rewards/purchase` принимает опциональный `targetUserId`. Без
+   него поведение не меняется (actor платит сам). С ним команда исполняется
+   **от имени beneficiary**: XP списывается у него, предмет попадает в его
+   инвентарь, а действующий родитель остаётся в audit trail (event.actorId,
+   пометка в RewardLog). `POST /api/rewards/use` **не получает нового поля**:
+   beneficiary уже однозначно определён `item.ownerId` по `inventoryId`;
+   меняется только правило доступа (см. §3).
 2. Право действовать от чужого имени имеет только OWNER/ADMIN, target обязан
    быть активным членом той же семьи (`assertCanActOnBehalf` в RBAC).
 3. Инвайт умеет **привязываться к существующему placeholder-профилю**: invite
@@ -42,11 +48,17 @@ receipt-механику.
 
 ## 3. Целевая архитектура
 
-- `purchaseReward(data, rewardId, actor, clock, idFactory, options?: { targetUserId?: string })`,
-  `useReward(...)` — аналогично. Beneficiary = `targetUserId ?? actor.id`.
-- `assertCanActOnBehalf(actor, targetUserId, data)` в `server/rbac.ts`:
-  actor — семейный админ; target — активный член семьи actor'а; иначе 403/409.
-- `useReward`: разрешено «своё» ИЛИ «админ от имени владельца предмета».
+- `purchaseReward(data, rewardId, actor, clock, idFactory, options?: { targetUserId?: string })`.
+  Beneficiary = `targetUserId ?? actor.id`.
+- `assertCanActOnBehalf(actor, targetUserId, data)`: actor — семейный админ;
+  target — активный член семьи actor'а (архивный `isActive:false` → 409);
+  иначе 403/409. В Phase A функция создаётся в `server/rbac.ts` как
+  **временное размещение** и переносится в `server/policy.ts` тикетом 402
+  (ADR 013 §1.5) — целевое место указывает ADR 013 §3.
+- `useReward(data, inventoryId, actor)` — сигнатура и payload не меняются;
+  beneficiary всегда `item.ownerId`. Правило доступа: `item.ownerId ===
+  actor.id` ИЛИ `assertCanActOnBehalf(actor, item.ownerId, data)` прошёл
+  (админ «выдаёт» предмет ребёнка). Прочим — 403, как сейчас.
 - Чтение: инвентарь детей виден OWNER/ADMIN (снятие фильтра в
   `filterForActor` для админов), UI показывает секции по владельцам с
   действием «Выдать».
@@ -61,13 +73,18 @@ receipt-механику.
 | Протокол | Producer | Consumer | Транспорт | Source of truth | Правило |
 |---|---|---|---|---|---|
 | Purchase on behalf | Shop UI | API rewards | POST `/api/rewards/purchase` `{rewardId, targetUserId?, revision, mutationId}` | SQLite aggregate | только админ; XP и ownerId — beneficiary |
-| Use on behalf | Shop UI | API rewards | POST `/api/rewards/use` `{inventoryId, targetUserId?, revision, mutationId}` | SQLite aggregate | своё или админ-от-имени |
+| Use on behalf | Shop UI | API rewards | POST `/api/rewards/use` `{inventoryId, revision, mutationId}` — payload без изменений | SQLite aggregate | своё, или админ от имени `item.ownerId` |
 | Invite claim | Mini App | API invites | POST `/api/family/invites/accept` `{token}` + initData | `family_invites.target_user_id` | claim = UPDATE существующей строки |
 
-Ошибки: 403 `ON_BEHALF_FORBIDDEN`; 409 `TARGET_MEMBER_NOT_FOUND`,
-`NOT_ENOUGH_XP` (баланс beneficiary), `CLAIM_TARGET_UNAVAILABLE`,
-`ACCOUNT_ALREADY_LINKED`; дубликат `mutationId` возвращает прежний результат
-без второго списания.
+Ошибки, вводимые этим ADR: 403 `ON_BEHALF_FORBIDDEN`; 409
+`TARGET_MEMBER_NOT_FOUND` (target отсутствует в семье ИЛИ `isActive:false`),
+`NOT_ENOUGH_XP` (баланс **beneficiary**, не actor'а), `CLAIM_TARGET_UNAVAILABLE`.
+Существующий инвайт-контракт переиспользуется без изменений и включает 404
+(invite not found), 409 `INVITE_USED`, 410 `INVITE_EXPIRED`, 409
+`ACCOUNT_ALREADY_LINKED` — эти ветки присутствуют на диаграмме claim для
+полноты пути; их поведение не меняется, но `ACCOUNT_ALREADY_LINKED`
+ре-тестируется в §6 как защита от кросс-семейного захвата placeholder'а.
+Дубликат `mutationId` возвращает прежний результат без второго списания.
 
 ## 5. Диаграммы
 
@@ -78,11 +95,17 @@ receipt-механику.
 
 ## 6. Соответствие и release gates
 
+Нумерация волн определена в бэклоге: `docs/backlog/README.md` (волна 2 =
+тикеты 111–113; порядок волн — ADR 013 §3).
+
 | Gate | Требуемое свидетельство | Блокирует |
 |---|---|---|
-| RBAC on-behalf | server-тесты: CHILD с чужим `targetUserId` → 403; не-член → 409 | выкатку волны 2 |
+| RBAC on-behalf | server-тесты: CHILD с чужим `targetUserId` → 403; target не найден → 409; target `isActive:false` в той же семье → 409 (два раздельных кейса) | выкатку волны 2 |
+| Баланс beneficiary | тест: actor.xp ≥ cost, но beneficiary.xp < cost → 409 `NOT_ENOUGH_XP`, баланс actor'а не тронут | выкатку волны 2 |
+| Use on behalf | тест: админ отмечает предмет ребёнка → USED; CHILD чужой предмет → 403 | выкатку волны 2 |
 | Идемпотентность | тест: повторный `mutationId` c `targetUserId` не удваивает списание | выкатку волны 2 |
 | Claim без сплита | тест: claim сохраняет id/xp/level/streak; нет пути с двумя строками | выкатку волны 2 |
+| Захват placeholder | тест: Telegram-аккаунт из другой семьи по claim-инвайту → 409 `ACCOUNT_ALREADY_LINKED`, существующая привязка не меняется | выкатку волны 2 |
 | Обратная совместимость | тест: payload без `targetUserId` идентичен прежнему поведению | выкатку волны 2 |
 
 ## 7. Риски и митигации
@@ -94,6 +117,13 @@ receipt-механику.
   ребёнка (иначе фича слепая) — закрыто тикетом 112.
 - Расхождение баланса в UI при выборе участника: проверка XP — по данным
   beneficiary из последнего снапшота; сервер остаётся авторитетом (409).
+- Соотношение с прецедентом `allowParentTaskCompletion` (задачи): там opt-in
+  тумблер защищает от **начисления** XP мимо ребёнка (обесценивает
+  геймификацию), здесь права жёстко у OWNER/ADMIN без тумблера — осознанное
+  различие: магазин наград целиком курируется родителем (он создаёт награды и
+  выдаёт призы), трата XP ребёнка без его устройства и есть смысл фичи.
+  Если появится запрос на запрет — точка расширения: family-setting поверх
+  `assertCanActOnBehalf`, без изменения контракта.
 
 ## 8. Отклонено / отложено
 
@@ -111,8 +141,13 @@ receipt-механику.
 
 1. Родитель покупает награду ребёнку без Telegram; XP списан у ребёнка,
    предмет в его инвентаре; в activity-ленте виден родитель.
-2. Родитель отмечает предмет ребёнка использованным («Выдать»).
+2. Родитель отмечает предмет ребёнка использованным («Выдать») — payload
+   `/api/rewards/use` без новых полей, доступ по `item.ownerId`.
 3. CHILD не может купить/использовать от чужого имени (403).
+3a. Родитель с достаточным личным XP не может купить награду ребёнку, если
+   у ребёнка не хватает XP: 409 `NOT_ENOUGH_XP`, баланс родителя не списан.
+3b. Telegram-аккаунт, уже привязанный к другой семье, не может завершить
+   claim по чужому инвайту: 409 `ACCOUNT_ALREADY_LINKED`.
 4. Инвайт из карточки placeholder-участника привязывает Telegram к
    существующему профилю; XP/level/streak сохранены; повторный claim → 409.
 5. Старые клиенты (payload без `targetUserId`) работают без изменений.

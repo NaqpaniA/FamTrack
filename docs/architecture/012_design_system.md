@@ -79,6 +79,8 @@ aria-label на icon-only кнопках.
 
 ## 6. Соответствие и release gates
 
+Нумерация волн — `docs/backlog/README.md` и карта волн в ADR 013 §3.
+
 | Gate | Требуемое свидетельство | Блокирует |
 |---|---|---|
 | Grep-гейты | 0 `!important` в theme-слое; 0 `confirm(`/`alert(`; 0 raw `env(safe-area`; лимиты на `text-[`/`rounded-[` | закрытие волны 3 |

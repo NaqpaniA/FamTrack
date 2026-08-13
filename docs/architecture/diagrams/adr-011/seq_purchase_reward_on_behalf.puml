@@ -26,7 +26,7 @@ deactivate db
 alt exact duplicate mutationId
   api --> ui : stored result; no second XP debit, no new revision
 else new command
-  api -> rbac : assertCanActOnBehalf(actor, targetUserId)
+  api -> rbac : assertCanActOnBehalf(actor, targetUserId, data)
   activate rbac
   rbac --> api : allowed | DomainError
   deactivate rbac

@@ -32,9 +32,8 @@ split с admin-гардом.
    - `const beneficiary = options?.targetUserId && options.targetUserId !== actor.id ? assertCanActOnBehalf(actor, options.targetUserId, data) : <текущий member-lookup по actor.id>`;
    - дальше вся логика (проверка XP, дебет, level, inventory ownerId, RewardLog userId) — по beneficiary;
    - при on-behalf в `RewardLog.description`/сообщении события добавить имя актора: `... (купил(а) ${actor.name})`; `event.actorId`/authorship события оставить за actor (как формируются события сейчас — сохранить структуру, поменяв только целевого участника).
-3. `useReward(data, inventoryId, actor, clock, options?: { targetUserId?: string })`:
-   - текущая проверка `item.ownerId !== actor.id → 403` заменяется на: разрешено, если `item.ownerId === actor.id`, ИЛИ (`options?.targetUserId === item.ownerId` и `assertCanActOnBehalf` прошёл).
-4. `server/index.ts`: в двух case передать `{ targetUserId: typeof body.targetUserId === 'string' ? body.targetUserId : undefined }`.
+3. `useReward(data, inventoryId, actor, ...)` — сигнатура и payload НЕ меняются (ADR 011 §3, актуализация 2026-08-13): beneficiary всегда `item.ownerId`. Текущая проверка `item.ownerId !== actor.id → 403` заменяется на: разрешено, если `item.ownerId === actor.id`, ИЛИ `assertCanActOnBehalf(actor, item.ownerId, data)` прошёл. Никакого `targetUserId` в этом эндпоинте.
+4. `server/index.ts`: только в case `/api/rewards/purchase` передать `{ targetUserId: typeof body.targetUserId === 'string' ? body.targetUserId : undefined }`. Case `/api/rewards/use` не меняется.
 5. `filterForActor` (`server/rbac.ts:~91`): для админов НЕ фильтровать чужой инвентарь (сейчас non-owner теряет чужие предметы из payload — уточнить текущее условие и ослабить только для `isFamilyAdmin`). CHILD видит только своё, как раньше.
 
 ## Контракт
@@ -52,7 +51,8 @@ beneficiary). Идемпотентность — существующая receip
 - CHILD с `targetUserId` другого участника → DomainError 403.
 - targetUserId несуществующего/неактивного → 409.
 - XP ребёнка < cost → 409 (даже если у admin XP хватает).
-- `useReward` on-behalf: admin отмечает предмет ребёнка → USED; CHILD чужой предмет → 403; `targetUserId`, не совпадающий с ownerId предмета → 403.
+- `useReward` on-behalf: admin отмечает предмет ребёнка → USED; CHILD чужой предмет → 403.
+- target `isActive:false` в той же семье → 409 (отдельный кейс от «не найден»).
 - Без targetUserId — прежние кейсы зелёные без правок.
 
 `server/router.test.ts`:
