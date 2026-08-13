@@ -4,7 +4,7 @@
 
 autonumber
 title FamTrack — reward purchase on behalf of a child without Telegram
-footer Contract: beneficiary pays XP and owns the item; actor stays in the audit trail
+footer Contract: beneficiary (CHILD) pays XP and owns the item; actor stays in the audit trail
 
 actor "Parent (OWNER/ADMIN)" as actor
 boundary "Shop UI (member picker)" as ui
@@ -25,6 +25,7 @@ deactivate db
 
 alt exact duplicate mutationId
   api --> ui : stored result; no second XP debit, no new revision
+  ui --> actor : состояние без изменений (тихое обновление)
 else new command
   api -> rbac : assertCanActOnBehalf(actor, targetUserId, data)
   activate rbac
@@ -33,10 +34,13 @@ else new command
 
   alt targetUserId set and actor is not family admin
     api --> ui : 403 ON_BEHALF_FORBIDDEN
-  else target is not an active family member
+    ui --> actor : тост «Недостаточно прав»
+  else target missing, inactive or role is not CHILD
     api --> ui : 409 TARGET_MEMBER_NOT_FOUND
+    ui --> actor : тост с текстом ошибки
   else beneficiary XP below reward cost
     api --> ui : 409 NOT_ENOUGH_XP
+    ui --> actor : тост «У {имя} не хватает XP»
   else purchase allowed
     api -> rewards : purchaseReward(data, rewardId, actor,\n{targetUserId})
     activate rewards
@@ -49,11 +53,11 @@ else new command
     db --> api : COMMIT, new revision
     deactivate db
     api --> ui : authoritative state\n(item in beneficiary backpack)
+    ui --> actor : «Куплено для {имя ребёнка}»
   end
 end
 
 deactivate api
-ui --> actor : «Куплено для {имя ребёнка}»
 deactivate ui
 deactivate actor
 @enduml

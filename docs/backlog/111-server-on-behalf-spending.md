@@ -23,9 +23,10 @@ split с admin-гардом.
    export const assertCanActOnBehalf = (actor: User, targetUserId: string, data: AppData): User => {
        if (!isFamilyAdmin(actor)) throw new DomainError('Only family admins can act on behalf of another member', 403);
        const target = data.members.find(m => m.id === targetUserId && m.isActive !== false);
-       if (!target) throw new DomainError('Target family member not found', 409);
+       if (!target || target.role !== 'CHILD') throw new DomainError('Target family member not found', 409);
        return target;
    }
+   Ограничение роли target = CHILD — осознанное (ADR 011 §3): admin-to-admin траты запрещены.
    ```
    (использовать существующие хелперы isAdmin/isOwner; импорт DomainError как в domain.ts — если DomainError живёт в domain.ts, разместить assertCanActOnBehalf в domain.ts и вызывать из него, НЕ создавая циклический импорт).
 2. `purchaseReward(data, rewardId, actor, clock, idFactory, options?: { targetUserId?: string })`:
@@ -53,6 +54,7 @@ beneficiary). Идемпотентность — существующая receip
 - XP ребёнка < cost → 409 (даже если у admin XP хватает).
 - `useReward` on-behalf: admin отмечает предмет ребёнка → USED; CHILD чужой предмет → 403.
 - target `isActive:false` в той же семье → 409 (отдельный кейс от «не найден»).
+- targetUserId с ролью ADMIN/OWNER → 409 (admin-to-admin запрещён).
 - Без targetUserId — прежние кейсы зелёные без правок.
 
 `server/router.test.ts`:

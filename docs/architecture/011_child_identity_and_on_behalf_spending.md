@@ -51,8 +51,11 @@ receipt-механику.
 - `purchaseReward(data, rewardId, actor, clock, idFactory, options?: { targetUserId?: string })`.
   Beneficiary = `targetUserId ?? actor.id`.
 - `assertCanActOnBehalf(actor, targetUserId, data)`: actor — семейный админ;
-  target — активный член семьи actor'а (архивный `isActive:false` → 409);
-  иначе 403/409. В Phase A функция создаётся в `server/rbac.ts` как
+  target — активный член семьи actor'а (архивный `isActive:false` → 409)
+  **с ролью `CHILD`** (409 для target-админа/владельца: смысл фичи — родитель
+  тратит XP ребёнка; admin-to-admin траты запрещены осознанно, у взрослых
+  есть собственное устройство). Иначе 403/409.
+  В Phase A функция создаётся в `server/rbac.ts` как
   **временное размещение** и переносится в `server/policy.ts` тикетом 402
   (ADR 013 §1.5) — целевое место указывает ADR 013 §3.
 - `useReward(data, inventoryId, actor)` — сигнатура и payload не меняются;
@@ -64,7 +67,14 @@ receipt-механику.
   действием «Выдать».
 - Инвайт: колонка `family_invites.target_user_id` (идемпотентная миграция
   `ALTER TABLE ADD COLUMN`); accept при заданном target и свободной строке
-  выполняет UPDATE вместо INSERT.
+  выполняет UPDATE вместо INSERT. **Precedence при существующем акторе**:
+  если Telegram-аккаунт уже резолвится в активного члена той же семьи, а
+  `invite.targetUserId` задан и не равен его id (родитель открыл свою же
+  пересылаемую ссылку) — 409 `CLAIM_ACTOR_MISMATCH`, и инвайт **не
+  помечается использованным** (единственный токен не сгорает от чужой
+  попытки); если равен (повторный accept уже привязанного target) —
+  идемпотентный ответ envelope. Существующий early-return «тот же актор,
+  та же семья» срабатывает только для инвайтов без target.
 - Клиент: селектор «Кому» в магазине для админов; проверка баланса —
   по выбранному участнику, не по `currentUser`.
 
@@ -76,9 +86,12 @@ receipt-механику.
 | Use on behalf | Shop UI | API rewards | POST `/api/rewards/use` `{inventoryId, revision, mutationId}` — payload без изменений | SQLite aggregate | своё, или админ от имени `item.ownerId` |
 | Invite claim | Mini App | API invites | POST `/api/family/invites/accept` `{token}` + initData | `family_invites.target_user_id` | claim = UPDATE существующей строки |
 
-Ошибки, вводимые этим ADR: 403 `ON_BEHALF_FORBIDDEN`; 409
-`TARGET_MEMBER_NOT_FOUND` (target отсутствует в семье ИЛИ `isActive:false`),
-`NOT_ENOUGH_XP` (баланс **beneficiary**, не actor'а), `CLAIM_TARGET_UNAVAILABLE`.
+Ошибки, вводимые этим ADR: 403 `ON_BEHALF_FORBIDDEN` (actor не админ);
+409 `TARGET_MEMBER_NOT_FOUND` (target отсутствует в семье, `isActive:false`
+ИЛИ роль не `CHILD`), `NOT_ENOUGH_XP` (баланс **beneficiary**, не actor'а),
+`CLAIM_TARGET_UNAVAILABLE` (target claim'а отсутствует, архивный или уже
+привязан), `CLAIM_ACTOR_MISMATCH` (актор — уже член семьи, но не target
+именного инвайта; инвайт не сгорает).
 Существующий инвайт-контракт переиспользуется без изменений и включает 404
 (invite not found), 409 `INVITE_USED`, 410 `INVITE_EXPIRED`, 409
 `ACCOUNT_ALREADY_LINKED` — эти ветки присутствуют на диаграмме claim для
@@ -100,12 +113,14 @@ receipt-механику.
 
 | Gate | Требуемое свидетельство | Блокирует |
 |---|---|---|
-| RBAC on-behalf | server-тесты: CHILD с чужим `targetUserId` → 403; target не найден → 409; target `isActive:false` в той же семье → 409 (два раздельных кейса) | выкатку волны 2 |
+| RBAC on-behalf | server-тесты: CHILD с чужим `targetUserId` → 403; target не найден → 409; target `isActive:false` в той же семье → 409; target с ролью ADMIN/OWNER → 409 (раздельные кейсы) | выкатку волны 2 |
 | Баланс beneficiary | тест: actor.xp ≥ cost, но beneficiary.xp < cost → 409 `NOT_ENOUGH_XP`, баланс actor'а не тронут | выкатку волны 2 |
 | Use on behalf | тест: админ отмечает предмет ребёнка → USED; CHILD чужой предмет → 403 | выкатку волны 2 |
 | Идемпотентность | тест: повторный `mutationId` c `targetUserId` не удваивает списание | выкатку волны 2 |
 | Claim без сплита | тест: claim сохраняет id/xp/level/streak; нет пути с двумя строками | выкатку волны 2 |
 | Захват placeholder | тест: Telegram-аккаунт из другой семьи по claim-инвайту → 409 `ACCOUNT_ALREADY_LINKED`, существующая привязка не меняется | выкатку волны 2 |
+| Инвайт не сгорает | тест: член семьи (не target) открывает именной инвайт → 409 `CLAIM_ACTOR_MISMATCH`, `used_at` остаётся NULL, повторный claim правильным аккаунтом проходит | выкатку волны 2 |
+| Архивный target claim | тест: claim по инвайту на `isActive:false` участника → 409 `CLAIM_TARGET_UNAVAILABLE`, инвайт не помечается использованным | выкатку волны 2 |
 | Обратная совместимость | тест: payload без `targetUserId` идентичен прежнему поведению | выкатку волны 2 |
 
 ## 7. Риски и митигации

@@ -16,7 +16,8 @@ purchase-import regex-роуты, хелперы нормализации. Пе�
 
 ## Точные изменения
 
-1. `registry.ts`: `type RouteEntry = { pathname: string | RegExp; method: 'POST'|'GET'; handler: (ctx) => Promise<Response-подобное>; writeTargets?: string[] }`; собрать массив из всех текущих case-блоков. Тип ctx — существующие аргументы (req, res, body, context, db...) в объекте.
+1. `registry.ts`: `type RouteEntry = { pattern: string; method: 'POST'|'GET'; handler: (ctx) => Promise<Response-подобное>; writeTargets?: string[]; label?: string }` — pattern поддерживает `:param`-сегменты (`/api/purchase-imports/:id/confirm`) с простым парсером; извлечённые params попадают в ctx. Собрать массив из всех текущих case-блоков И всех regex-веток (`/api/pantry/:id/adjust`, `/api/purchase-imports/:id/*`, `/api/users/:id/avatar` — см. index.ts:241-404). Тип ctx — существующие аргументы (req, res, body, context, db, params...) в объекте.
+1a. Purchase-imports/pantry/receipt-OCR HTTP-обработчики → `server/routes/purchase-imports.ts`. Фоновые функции (`recoverReceiptQueue`, `scheduleReceiptRetry`, `cleanupExpiredReceiptFiles`, `internalReceiptMutation`, index.ts:1080-1165) → `server/jobs/receipt-queue.ts` (вне registry) с отдельным smoke-тестом `server/jobs.test.ts` (recovery на пустой БД не падает и не мутирует).
 2. Каждый `server/routes/<domain>.ts` — перенесённые тела case-блоков, названные функциями (`handleTaskSave` и т.д.). Код копировать 1:1, менять только механику передачи аргументов.
 3. `index.ts`: `handleApi` — pre-auth ветки (health, internal, invites/accept) остаются; затем поиск в registry; 404/405 как раньше. Хелперы нормализации (`normalizeFamilyUser` и т.п.) переезжают в соответствующие route-модули или `server/routes/shared.ts`.
 4. Метрики route-label (`index.ts:1552-1573`) — вынести в registry (label на entry).
@@ -43,4 +44,4 @@ purchase-import regex-роуты, хелперы нормализации. Пе�
 ## Самопроверка
 
 - [ ] `git diff` router.test.ts — пусто.
-- [ ] Ни один pathname не потерян: диф списка маршрутов до/после (grep case + registry) совпадает.
+- [ ] Ни один pathname не потерян: диф списка маршрутов до/после (grep case + regex-ветки + registry) совпадает; сверочный список приложен в ответ.

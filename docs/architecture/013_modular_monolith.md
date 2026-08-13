@@ -51,12 +51,25 @@ auth-служба и платёжные интеграции — за преде
 server/
   index.ts          — http, auth, static, dispatch (~200 строк)
   routes/
-    registry.ts     — pathname → {handler, writeTargets, policy}
+    registry.ts     — route pattern → {handler, writeTargets, policy, label}
     tasks.ts family.ts finance.ts rewards.ts household.ts
     shopping.ts routines.ts settings.ts
+    purchase-imports.ts   — purchase drafts, pantry-capture, receipt-OCR HTTP
+  jobs/
+    receipt-queue.ts — фоновые recoverReceiptQueue / scheduleReceiptRetry /
+                       cleanupExpiredReceiptFiles (вне registry: запускаются
+                       по таймеру/на старте, покрываются отдельным тестом,
+                       не router.test.ts)
   policy.ts         — декларативная таблица прав + assertCanActOnBehalf
   auth.ts database.ts domain.ts features.ts rbac.ts (читающая фильтрация)
 ```
+
+Registry матчит не только статические pathname: параметризованные маршруты
+(`/api/purchase-imports/:id/confirm`, `/api/pantry/:id/adjust`,
+`/api/users/:id/avatar` — сегодня это regex-ветки роутера) объявляются
+паттернами вида `:param` с простым парсером; извлечённые параметры передаются
+handler'у. 100% текущих pathname-обработчиков `index.ts` обязаны попасть в
+registry или в `jobs/` — сверка списком в тикете 401.
 
 Карта волн (единый источник нумерации — `docs/backlog/README.md`):
 
@@ -113,6 +126,20 @@ registry и падение на старте, не рантайм-ответ.
   волн, под защитой harness.
 - Policy-таблица может незаметно расширить права → тест фиксирует текущую
   матрицу до рефакторинга и сравнивает после.
+- Стоимость записи sql.js связана со ВСЕЙ базой: `persistedTransaction`
+  делает полный `db.export()` дважды на команду (snapshot для отката +
+  `persist()` с перезаписью файла), и цена растёт с суммарным объёмом данных
+  всех семей, а не активной («noisy neighbor» на уровне файла). Это
+  осознанный, инструментированный риск: порог перехода на
+  Postgres/native SQLite определяет **ADR 008 §4** (DB ≥ 50 MiB или write
+  p95 ≥ 250 ms неделю; метрики `database_size_bytes`, `write_latency` уже
+  собираются) — второй, текстовый порог не вводится.
+- Internal-batch маршруты растут линейно с числом семей (отдельный от
+  fail-fast риск): `/api/internal/reminders/due` реконструирует полный
+  AppData каждой семьи на каждый опрос (60 с), receipt
+  recovery/retention — на каждом старте. Митигация при первых внешних
+  семьях: инкрементальный курсор по ревизии семьи вместо полного скана;
+  operational-порог — тот же ADR 008 §4 (латентность опроса в метриках).
 
 ## 8. Отклонено / отложено
 
@@ -130,6 +157,10 @@ registry и падение на старте, не рантайм-ответ.
 ## 9. Критерии приёмки
 
 1. `grep DEFAULT_FAMILY_ID server/` вне seed/dev-bootstrap и тестов — пусто.
+   Scope включает default-параметры публичных методов `database.ts`: целевые
+   сигнатуры — `getRevision(familyId: string)` (без default),
+   `resolveFamilyId` без финального fallback, `resolveRequestContext` без
+   `|| DEFAULT_FAMILY_ID`; вызовы в тестах передают familyId явно.
 2. Production-конфигурация включает allowlist; выключенный allowlist виден в
    логах как warning.
 3. `server/router.test.ts` покрывает auth, идемпотентность, revision, RBAC и

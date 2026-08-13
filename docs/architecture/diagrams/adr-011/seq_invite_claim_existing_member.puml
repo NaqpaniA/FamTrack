@@ -4,9 +4,9 @@
 
 autonumber
 title FamTrack — invite claims an existing placeholder member (no XP split)
-footer Contract: claim updates the existing row; id, xp, level and streak survive linking
+footer Contract: claim updates the existing row; id, xp, level and streak survive linking; a wrong actor never burns the token
 
-actor "Child (first Telegram login)" as child
+actor "Telegram user opening invite" as child
 boundary "Telegram Mini App" as app
 boundary "HTTP API" as api
 database "SQLite family aggregate" as db
@@ -18,26 +18,33 @@ app -> api : POST /api/family/invites/accept\n{token} + X-Telegram-Init-Data
 activate api
 api -> db : load invite by token + resolve telegram identity
 activate db
-db --> api : invite {familyId, role, targetUserId?} | none
+db --> api : invite {familyId, role, targetUserId?}\n+ existing member | none
 deactivate db
 
 alt invite missing / used / expired
   api --> app : 404 | 409 INVITE_USED | 410 INVITE_EXPIRED
+  app --> child : «Ссылка недействительна»
 else telegram account already in another family
   api --> app : 409 ACCOUNT_ALREADY_LINKED
+  app --> child : «Аккаунт уже привязан к другой семье»
+else actor is same-family member but not the invite target
+  api --> app : 409 CLAIM_ACTOR_MISMATCH\n(invite stays unused, used_at = NULL)
+  app --> child : «Ссылка предназначена другому участнику»
 else invite has targetUserId (claim flow)
   api -> db : verify target row: same family,\nactive, telegramId is empty
   activate db
   db --> api : placeholder member row
   deactivate db
-  alt target already linked or missing
-    api --> app : 409 CLAIM_TARGET_UNAVAILABLE
+  alt target linked, archived or missing
+    api --> app : 409 CLAIM_TARGET_UNAVAILABLE\n(invite stays unused)
+    app --> child : «Профиль недоступен для привязки»
   else claim allowed
     api -> db : BEGIN; UPDATE existing user row:\ntelegram_id, username, names, avatarUrl;\nkeep id, xp, level, streak, role;\nmark invite used; revision +1
     activate db
     db --> api : COMMIT
     deactivate db
     api --> app : app-data envelope for claimed member
+    app --> child : профиль привязан, XP на месте
   end
 else plain invite (no target)
   api -> db : BEGIN; INSERT new member row;\nmark invite used; revision +1
@@ -45,10 +52,10 @@ else plain invite (no target)
   db --> api : COMMIT
   deactivate db
   api --> app : app-data envelope for new member
+  app --> child : добро пожаловать в семью
 end
 
 deactivate api
-app --> child : профиль привязан, XP на месте
 deactivate app
 deactivate child
 @enduml

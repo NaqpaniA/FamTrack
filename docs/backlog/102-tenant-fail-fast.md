@@ -20,6 +20,7 @@
 1. Добавить `export class TenantResolutionError extends Error { status = 500 }` в `server/database.ts`.
 2. Каждый fallback на `DEFAULT_FAMILY_ID` в путях чтения/записи данных заменить на `throw new TenantResolutionError('Family id is required for <операция>')`. Исключения, где fallback ОСТАЁТСЯ: dev-актор (`resolveActor` при `telegramId === 0` в dev-mode), seed/bootstrap (`createProductionBootstrapData`, `ensureLegacyFamilyIds`, миграции легаси-данных).
 3. В `resolveRequestContext`: если у актора нет `familyId` — 500 TenantResolutionError (вместо дефолта).
+3a. Default-параметры публичных методов database.ts тоже в scope (ADR 013 §9.1): `getRevision(familyId: string)` — убрать default, `resolveFamilyId` — убрать финальный `return DEFAULT_FAMILY_ID`. Вызовы в тестах передают familyId явно.
 4. Прогнать все существующие тесты; если какой-то путь (reminders `/api/internal/reminders/due`, receipt recovery, `getAppData` без актора) падает — передавать familyId явно по месту вызова, НЕ возвращать fallback.
 
 ## Контракт
