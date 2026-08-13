@@ -15,6 +15,10 @@
   --app-accent: #2481cc;
   --app-accent-text: #ffffff;
   --app-border: rgba(15, 23, 42, 0.08);
+  --app-surface-strong: #0f172a;
+  --app-danger: #ef4444;
+  --app-success: #22c55e;
+  --app-warning: #f59e0b;
   --app-radius-sm: 12px;
   --app-radius-md: 18px;
   --app-radius-lg: 24px;
@@ -26,6 +30,7 @@
   --app-safe-right: max(env(safe-area-inset-right, 0px), var(--tg-safe-area-inset-right, 0px), var(--tg-content-safe-area-inset-right, 0px));
   --app-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px), var(--tg-content-safe-area-inset-bottom, 0px));
   --app-safe-left: max(env(safe-area-inset-left, 0px), var(--tg-safe-area-inset-left, 0px), var(--tg-content-safe-area-inset-left, 0px));
+  --app-bottom-clearance: calc(var(--bottom-nav-height) + 18px + var(--app-safe-bottom));
 }
 
 *,
