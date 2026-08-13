@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
-import { DEFAULT_FAMILY_ID, FamTrackDatabase, RevisionConflictError, normalizeAiInputHash } from './database.js';
+import { FamTrackDatabase, RevisionConflictError, TenantResolutionError, normalizeAiInputHash } from './database.js';
 import { AuthError, getAuthConfig, validateRequestAuth, type AuthConfig, type AuthContext } from './auth.js';
 import { ForbiddenError, assertCanWrite, filterForActor, isAdmin, isOwner } from './rbac.js';
 import { familyInviteUrl, telegramMiniAppInviteUrl } from './links.js';
@@ -848,9 +848,12 @@ export const createAppServer = (db: FamTrackDatabase, options: AppServerOptions 
         }
         const telegramId = authForActor.telegramId;
         const isDeveloperOwner = telegramId === 0 || (!!telegramId && !!authConfig.developerOwnerTelegramIds?.has(telegramId));
+        if (!actor.familyId) {
+            throw new TenantResolutionError('Family id is required to resolve request context');
+        }
         return {
             actor,
-            familyId: actor.familyId || DEFAULT_FAMILY_ID,
+            familyId: actor.familyId,
             isDeveloperOwner
         };
     }

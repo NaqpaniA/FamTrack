@@ -251,6 +251,10 @@ export class InviteError extends Error {
     status = 400;
 }
 
+export class TenantResolutionError extends Error {
+    status = 500;
+}
+
 export class FamTrackDatabase {
     private readonly operationMetrics = {
         commandRebased: 0,
@@ -289,9 +293,13 @@ export class FamTrackDatabase {
     }
 
     health() {
+        // Health check spans all tenants, so there is no single family whose
+        // revision is authoritative here — sum every family's revision
+        // instead of guessing a "default" one (ADR 013 §1.1).
+        const revision = this.listFamilyIds().reduce((sum, familyId) => sum + this.getRevision(familyId), 0);
         return {
             ok: true,
-            revision: this.getRevision(),
+            revision,
             families: Number(this.selectValue('SELECT COUNT(*) FROM families') || 0)
         };
     }
@@ -358,7 +366,7 @@ export class FamTrackDatabase {
         };
     }
 
-    getRevision(familyId = DEFAULT_FAMILY_ID) {
+    getRevision(familyId: string) {
         return Number(this.selectValue('SELECT revision FROM families WHERE id = ?', [familyId]) || 0);
     }
 
@@ -2238,13 +2246,16 @@ export class FamTrackDatabase {
     }
 
     private resolveFamilyId(familyOrActor?: string | User) {
-        if (typeof familyOrActor === 'string') return familyOrActor;
+        if (typeof familyOrActor === 'string') {
+            if (!familyOrActor) throw new TenantResolutionError('Family id is required to resolve tenant data');
+            return familyOrActor;
+        }
         if (familyOrActor?.familyId) return familyOrActor.familyId;
         if (familyOrActor?.id) {
             const familyId = this.selectValue('SELECT family_id FROM users WHERE id = ? LIMIT 1', [familyOrActor.id]);
             if (familyId) return String(familyId);
         }
-        return DEFAULT_FAMILY_ID;
+        throw new TenantResolutionError('Family id is required to resolve tenant data');
     }
 
     private getState(key: string) {

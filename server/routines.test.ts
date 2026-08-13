@@ -6,7 +6,7 @@ import test from 'node:test';
 import { INITIAL_DATA } from '../data.js';
 import type { AppData } from '../types.js';
 import { DEFAULT_FAMILY_SETTINGS } from '../settings.model.js';
-import { FamTrackDatabase } from './database.js';
+import { DEFAULT_FAMILY_ID, FamTrackDatabase } from './database.js';
 import { DomainError } from './domain.js';
 import { filterForActor } from './rbac.js';
 import {
@@ -355,7 +355,7 @@ test('routine command persists only its registered collections and survives reop
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'famtrack-routine-'));
     const dbPath = path.join(directory, 'famtrack.sqlite');
     const db = await FamTrackDatabase.open(dbPath);
-    const before = db.exportEnvelope();
+    const before = db.exportEnvelope(DEFAULT_FAMILY_ID);
     const actor = before.data.currentUser;
     const saved = db.mutateCommand(before.data.family!.id, before.revision, {
         mutationId: 'mutation-routine-save-contract',
@@ -371,8 +371,8 @@ test('routine command persists only its registered collections and survives reop
     db.close();
 
     const reopened = await FamTrackDatabase.open(dbPath);
-    assert.equal(reopened.getAppData().routines?.[0].title, 'Полить растения');
-    assert.equal(reopened.getAppData().tasks.filter(task => !!task.routineTemplateId).length, 1);
+    assert.equal(reopened.getAppData(DEFAULT_FAMILY_ID).routines?.[0].title, 'Полить растения');
+    assert.equal(reopened.getAppData(DEFAULT_FAMILY_ID).tasks.filter(task => !!task.routineTemplateId).length, 1);
     reopened.close();
 });
 
@@ -380,7 +380,7 @@ test('accumulator command replay awards once and returns the fresh current-user 
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'famtrack-routine-replay-'));
     const dbPath = path.join(directory, 'famtrack.sqlite');
     const db = await FamTrackDatabase.open(dbPath);
-    const before = db.exportEnvelope();
+    const before = db.exportEnvelope(DEFAULT_FAMILY_ID);
     const staleActor = { ...before.data.currentUser };
     const idFactory = ids();
     const saved = db.mutateCommand(before.data.family!.id, before.revision, {

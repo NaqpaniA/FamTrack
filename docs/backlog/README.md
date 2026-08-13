@@ -9,12 +9,12 @@
 | # | Тикет | Волна | Модель | Зависит от | Статус |
 |---|---|---|---|---|---|
 | 101 | [HTTP-интеграционный harness роутера](101-router-http-harness.md) | 1 | sonnet | — | done |
-| 102 | [Fail-fast вместо DEFAULT_FAMILY_ID](102-tenant-fail-fast.md) | 1 | sonnet | 101 | todo |
+| 102 | [Fail-fast вместо DEFAULT_FAMILY_ID](102-tenant-fail-fast.md) | 1 | sonnet | 101 | done |
 | 103 | [Allowlist: включить и документировать](103-allowlist-enforcement.md) | 1 | haiku | — | done |
 | 111 | [Server: on-behalf purchase/use](111-server-on-behalf-spending.md) | 2 | sonnet | 101 | todo |
 | 112 | [Client: member-picker в магазине](112-client-member-picker.md) | 2 | sonnet | 111 | todo |
 | 113 | [Invite claim-flow к placeholder](113-invite-claim-flow.md) | 2 | sonnet | 101 | todo |
-| 201 | [Токены в tailwind.config + z-шкала](201-design-tokens.md) | 3 | sonnet | — | todo |
+| 201 | [Токены в tailwind.config + z-шкала](201-design-tokens.md) | 3 | sonnet | — | done |
 | 202 | [Примитивы ui-kit](202-ui-kit-primitives.md) | 3 | sonnet | 201 | todo |
 | 203 | [Наложения и нижняя геометрия](203-bottom-geometry.md) | 3 | sonnet | 201 | todo |
 | 204 | [Миграция: dashboard](204-migrate-dashboard.md) | 3 | haiku | 202, 203 | todo |

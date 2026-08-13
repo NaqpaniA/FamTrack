@@ -6,7 +6,7 @@ import test from 'node:test';
 import { INITIAL_DATA } from '../data.js';
 import type { AppData } from '../types.js';
 import { DEFAULT_FAMILY_SETTINGS } from '../settings.model.js';
-import { FamTrackDatabase } from './database.js';
+import { DEFAULT_FAMILY_ID, FamTrackDatabase } from './database.js';
 import { DomainError } from './domain.js';
 import {
     addPurchaseBarcode,
@@ -192,7 +192,7 @@ test('persisted confirm is idempotent even with a new mutation id and survives r
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'famtrack-purchase-'));
     const dbPath = path.join(directory, 'famtrack.sqlite');
     const db = await FamTrackDatabase.open(dbPath);
-    const initial = db.exportEnvelope();
+    const initial = db.exportEnvelope(DEFAULT_FAMILY_ID);
     const actor = initial.data.currentUser;
     const familyId = initial.data.family!.id;
     const created = db.mutateCommand(familyId, initial.revision, {
@@ -217,10 +217,10 @@ test('persisted confirm is idempotent even with a new mutation id and survives r
     db.close();
 
     const reopened = await FamTrackDatabase.open(dbPath);
-    const job = reopened.getAppData().purchaseImports?.find(candidate => candidate.id === 'persisted-import');
+    const job = reopened.getAppData(DEFAULT_FAMILY_ID).purchaseImports?.find(candidate => candidate.id === 'persisted-import');
     assert.equal(job?.status, 'CONFIRMED');
     assert.equal(job?.items.length, 1);
-    assert.equal(reopened.getAppData().transactions.filter(transaction => transaction.id === 'transaction-purchase-persisted-import').length, 1);
+    assert.equal(reopened.getAppData(DEFAULT_FAMILY_ID).transactions.filter(transaction => transaction.id === 'transaction-purchase-persisted-import').length, 1);
     reopened.close();
 });
 
@@ -228,7 +228,7 @@ test('receipt file metadata survives database reopen without storing image bytes
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'famtrack-receipt-file-'));
     const dbPath = path.join(directory, 'famtrack.sqlite');
     const db = await FamTrackDatabase.open(dbPath);
-    const initial = db.exportEnvelope();
+    const initial = db.exportEnvelope(DEFAULT_FAMILY_ID);
     const actor = initial.data.currentUser;
     const familyId = initial.data.family!.id;
     const created = db.mutateCommand(familyId, initial.revision, {
@@ -249,7 +249,7 @@ test('receipt file metadata survives database reopen without storing image bytes
     db.close();
 
     const reopened = await FamTrackDatabase.open(dbPath);
-    const file = reopened.getAppData().purchaseImports?.find(job => job.id === 'file-import')?.files?.[0];
+    const file = reopened.getAppData(DEFAULT_FAMILY_ID).purchaseImports?.find(job => job.id === 'file-import')?.files?.[0];
     assert.equal(file?.path, '/data/imports/fam-default/file-import/1-a.png');
     assert.equal(file?.width, 10);
     assert.equal(file?.height, 10);
