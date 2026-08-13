@@ -54,6 +54,7 @@ Vite проксирует `/api` на `http://127.0.0.1:8080`.
 TELEGRAM_BOT_TOKEN=123456:...
 FAMTRACK_ALLOWED_TELEGRAM_IDS=111111111,222222222
 FAMTRACK_ALLOWED_TELEGRAM_USERNAMES=
+FAMTRACK_REQUIRE_ALLOWLIST=1
 FAMTRACK_PUBLIC_HOST=famtrack.example.com
 FAMTRACK_PUBLIC_PORT=
 FAMTRACK_PUBLIC_URL=
@@ -75,6 +76,9 @@ FAMTRACK_AGENT_REMINDER_INTERVAL_SECONDS=60
 ```
 
 `TELEGRAM_BOT_TOKEN` берётся у BotFather. `FAMTRACK_ALLOWED_TELEGRAM_IDS` — числовые Telegram user id членов семьи.
+`FAMTRACK_REQUIRE_ALLOWLIST=1` включает проверку allowlist-списков на этапе
+аутентификации; без него списки используются только для bootstrap первого
+владельца и НЕ ограничивают вход (сервер пишет warning в лог в production).
 
 Отдельный alert-процесс читает только `/home/naqpania/apps/famtrack/.env.agent-alerts`:
 

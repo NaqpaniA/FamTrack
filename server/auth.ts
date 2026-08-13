@@ -49,13 +49,18 @@ export const getAuthConfig = (): AuthConfig => {
             .filter(value => Number.isFinite(value))
     );
 
+    const enforceAllowlist = process.env.FAMTRACK_REQUIRE_ALLOWLIST === '1';
+    if (!enforceAllowlist && mode === 'telegram' && process.env.NODE_ENV === 'production') {
+        console.warn('[auth] FAMTRACK_REQUIRE_ALLOWLIST is not enabled: allowlist env vars are NOT enforced');
+    }
+
     return {
         mode,
         botToken: process.env.TELEGRAM_BOT_TOKEN,
         allowedTelegramIds,
         allowedTelegramUsernames,
         developerOwnerTelegramIds,
-        enforceAllowlist: process.env.FAMTRACK_REQUIRE_ALLOWLIST === '1',
+        enforceAllowlist,
         internalApiSecret: process.env.FAMTRACK_INTERNAL_API_SECRET,
         initDataMaxAgeSeconds: normalizePositiveInteger(process.env.FAMTRACK_INIT_DATA_MAX_AGE_SECONDS, 86400)
     };

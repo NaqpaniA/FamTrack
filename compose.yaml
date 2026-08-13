@@ -9,6 +9,7 @@ services:
     environment:
       NODE_ENV: production
       FAMTRACK_AUTH_MODE: telegram
+      FAMTRACK_REQUIRE_ALLOWLIST: "1"
       FAMTRACK_DB_PATH: /data/famtrack.sqlite
       FAMTRACK_IMPORTS_DIR: /data/imports
       FAMTRACK_STATIC_DIR: /app/dist

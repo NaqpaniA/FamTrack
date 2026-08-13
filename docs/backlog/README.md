@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | 101 | [HTTP-интеграционный harness роутера](101-router-http-harness.md) | 1 | sonnet | — | done |
 | 102 | [Fail-fast вместо DEFAULT_FAMILY_ID](102-tenant-fail-fast.md) | 1 | sonnet | 101 | todo |
-| 103 | [Allowlist: включить и документировать](103-allowlist-enforcement.md) | 1 | haiku | — | todo |
+| 103 | [Allowlist: включить и документировать](103-allowlist-enforcement.md) | 1 | haiku | — | done |
 | 111 | [Server: on-behalf purchase/use](111-server-on-behalf-spending.md) | 2 | sonnet | 101 | todo |
 | 112 | [Client: member-picker в магазине](112-client-member-picker.md) | 2 | sonnet | 111 | todo |
 | 113 | [Invite claim-flow к placeholder](113-invite-claim-flow.md) | 2 | sonnet | 101 | todo |
