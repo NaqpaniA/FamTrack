@@ -302,33 +302,38 @@ export const TaskEditor = ({ task, onSave, onDelete, onRoutineComplete, routineP
   const handleSave = async () => {
     if (!title.trim() || isSaving) return;
     setSaving(true);
-    const result = await onSave({
-      id: task?.id || Math.random().toString(36).substr(2, 9),
-      title,
-      description,
-      priority,
-      difficulty,
-      points,
-      assigneeId,
-      createdById: task?.createdById || currentUser.id,
-      epicId: epicId || undefined,
-      status,
-      subtasks,
-      createdAt: task?.createdAt || Date.now(),
-      sortOrder: task?.sortOrder,
-      dueDate,
-      reminderTime: reminderTimestamp(dueDate, reminderTime),
-      isRecurring,
-      frequency: isRecurring ? frequency : undefined,
-      visibleTo,
-      notificationMode,
-      capturedAt: task?.capturedAt || Date.now(),
-      nextAction: nextAction.trim() || undefined,
-      estimateMinutes: estimateMinutes ? Number(estimateMinutes) : undefined,
-      dependsOnIds
-    });
-    if (result && result.kind === 'status-failed') setStatus(result.confirmedStatus);
-    setSaving(false);
+    try {
+      const result = await onSave({
+        id: task?.id || Math.random().toString(36).substr(2, 9),
+        title,
+        description,
+        priority,
+        difficulty,
+        points,
+        assigneeId,
+        createdById: task?.createdById || currentUser.id,
+        epicId: epicId || undefined,
+        status,
+        subtasks,
+        createdAt: task?.createdAt || Date.now(),
+        sortOrder: task?.sortOrder,
+        dueDate,
+        reminderTime: reminderTimestamp(dueDate, reminderTime),
+        isRecurring,
+        frequency: isRecurring ? frequency : undefined,
+        visibleTo,
+        notificationMode,
+        capturedAt: task?.capturedAt || Date.now(),
+        nextAction: nextAction.trim() || undefined,
+        estimateMinutes: estimateMinutes ? Number(estimateMinutes) : undefined,
+        dependsOnIds
+      });
+      if (result && result.kind === 'status-failed') setStatus(result.confirmedStatus);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Не удалось сохранить задачу');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleBreakdown = async () => {

@@ -97,6 +97,34 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * A request that never settles keeps its caller's spinner up forever and, because
+ * every request is serialised through the queue below, blocks every later command
+ * as well. Mobile networks drop connections without closing them, so the deadline
+ * has to come from the client.
+ */
+const REQUEST_TIMEOUT_MS = 25000;
+const AI_REQUEST_TIMEOUT_MS = 90000;
+
+export class TimeoutError extends Error {
+    constructor(timeoutMs: number) {
+        super(`Сервер не ответил за ${Math.round(timeoutMs / 1000)} с. Проверьте связь — команда сохранена и уйдёт повторно.`);
+    }
+}
+
+const fetchWithDeadline = async (path: string, init: RequestInit = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> => {
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(path, { ...init, signal: controller.signal });
+    } catch (error) {
+        if (controller.signal.aborted) throw new TimeoutError(timeoutMs);
+        throw error;
+    } finally {
+        clearTimeout(deadline);
+    }
+};
+
 export type SaveState = {
     status: 'SAVED' | 'SAVING' | 'CHECK';
     pending: number;
@@ -212,7 +240,7 @@ export class ServerAdapter implements ApiInterface {
     }
 
     private async performLoadRequest(path: string): Promise<AppData> {
-        const response = await fetch(path, {
+        const response = await fetchWithDeadline(path, {
             headers: {
                 ...this.authHeaders(),
                 ...(this.latestEtag ? { 'If-None-Match': this.latestEtag } : {})
@@ -246,7 +274,7 @@ export class ServerAdapter implements ApiInterface {
         await this.refreshSaveState();
 
         try {
-            const response = await fetch(record.path, {
+            const response = await fetchWithDeadline(record.path, {
                 method: 'POST',
                 headers: {
                     ...this.authHeaders(),
@@ -360,18 +388,18 @@ export class ServerAdapter implements ApiInterface {
         for (const listener of this.saveStateListeners) listener(next);
     }
 
-    private async requestJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
-        const response = await fetch(path, {
+    private async requestJson<T>(path: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+        const response = await fetchWithDeadline(path, {
             method: 'POST',
             headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        });
+        }, timeoutMs);
         if (!response.ok) throw await this.apiError(response);
         return response.json() as Promise<T>;
     }
 
     private async getJson<T>(path: string): Promise<T> {
-        const response = await fetch(path, { headers: this.authHeaders() });
+        const response = await fetchWithDeadline(path, { headers: this.authHeaders() });
         if (!response.ok) throw await this.apiError(response);
         return response.json() as Promise<T>;
     }
@@ -520,11 +548,11 @@ export class ServerAdapter implements ApiInterface {
     }
 
     breakdownTask(input: { title: string; description?: string }) {
-        return this.requestJson<AiResult<{ title: string; summary: string; subtasks: SubTask[] }>>('/api/ai/task-breakdown', input);
+        return this.requestJson<AiResult<{ title: string; summary: string; subtasks: SubTask[] }>>('/api/ai/task-breakdown', input, AI_REQUEST_TIMEOUT_MS);
     }
 
     analyzeExpenses(input: { prompt?: string } = {}) {
-        return this.requestJson<AiResult<Record<string, unknown>>>('/api/ai/expense-analysis', input);
+        return this.requestJson<AiResult<Record<string, unknown>>>('/api/ai/expense-analysis', input, AI_REQUEST_TIMEOUT_MS);
     }
 
     saveRoutine(routine: Partial<RoutineTemplate> & { presetId?: string }) {
